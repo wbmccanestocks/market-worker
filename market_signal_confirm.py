@@ -4032,14 +4032,22 @@ def build_report(
 
 def read_recommendation_state() -> dict:
     if not RECOMMENDATION_STATE_FILE.exists():
-        return {"schema": "openclaw.market_worker.recommendation_state.v1", "active": {}}
+        return {"schema": "openclaw.market_worker.recommendation_state.v1", "active": {}, "intraday_buy_origins": {}}
     try:
         data = json.loads(RECOMMENDATION_STATE_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {"schema": "openclaw.market_worker.recommendation_state.v1", "active": {}}
     data.setdefault("schema", "openclaw.market_worker.recommendation_state.v1")
     data.setdefault("active", {})
+    data.setdefault("intraday_buy_origins", {})
     return data
+
+
+def intraday_buy_origins() -> dict[str, dict]:
+    """Return symbols whose intraday BUY notification was delivered."""
+    state = read_recommendation_state()
+    origins = state.get("intraday_buy_origins")
+    return origins if isinstance(origins, dict) else {}
 
 
 def write_recommendation_state(state: dict) -> None:
@@ -4245,6 +4253,10 @@ def acknowledge_recommendation_delivery(delivered: list[tuple[str, str]]) -> Non
         return
     state = read_recommendation_state()
     active = state.setdefault("active", {})
+    intraday_buy_origins = state.setdefault("intraday_buy_origins", {})
+    if not isinstance(intraday_buy_origins, dict):
+        intraday_buy_origins = {}
+        state["intraday_buy_origins"] = intraday_buy_origins
     seen_unheld_paper_sells = state.setdefault("notified_unheld_paper_sells", {})
     if not isinstance(seen_unheld_paper_sells, dict):
         seen_unheld_paper_sells = {}
@@ -4255,6 +4267,12 @@ def acknowledge_recommendation_delivery(delivered: list[tuple[str, str]]) -> Non
         if record and record.get("action") == action:
             record["notified"] = True
             record["notified_at"] = dt.datetime.now(TZ).isoformat()
+            if action == "PAPER_BUY":
+                intraday_buy_origins[ticker] = {
+                    "recommended_at": record.get("notified_at"),
+                    "valid_until": record.get("valid_until"),
+                    "source": "delivered_intraday_paper_buy",
+                }
             if action == "PAPER_SELL" and ticker not in open_position_tickers:
                 seen_unheld_paper_sells[ticker] = record["notified_at"]
     write_recommendation_state(state)

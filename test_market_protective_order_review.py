@@ -9,6 +9,17 @@ import market_schwab
 
 
 class MarketProtectiveOrderReviewTest(unittest.TestCase):
+    def test_intraday_origin_uses_structure_stop_and_preserves_profit(self) -> None:
+        stop, limit, trailing_pct, reasons = review.suggested_intraday_stop(
+            entry=100.0,
+            price=103.0,
+            plan={"status": "ok", "stop": 101.0, "reason": "recent three-bar swing low minus 0.3 five-minute ATR"},
+        )
+        self.assertEqual(stop, 101.0)
+        self.assertLess(limit, stop)
+        self.assertAlmostEqual(trailing_pct, (103.0 - 101.0) / 103.0 * 100)
+        self.assertIn("intraday-origin", reasons[0])
+
     def test_normalize_open_orders_preserves_percent_trailing_offset(self) -> None:
         orders = market_schwab.normalize_open_orders(
             [{

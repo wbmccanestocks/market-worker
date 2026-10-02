@@ -109,3 +109,42 @@ def analyze(symbol: str, candles: list[dict], now: datetime | None = None) -> di
     }
     result["signals"] = signals
     return result
+
+
+def protection_plan(symbol: str, candles: list[dict], now: datetime | None = None) -> dict:
+    """Return a long-position 5-minute structure/ATR protection plan.
+
+    This is advisory only. The stop sits below the recent completed-bar swing
+    low with a small ATR buffer; it never widens an existing broker stop.
+    """
+    now_et = (now or datetime.now(ET)).astimezone(ET)
+    today = [bar for bar in normalize_candles(candles) if bar.timestamp.date() == now_et.date()]
+    if len(today) < 5:
+        return {"symbol": symbol.upper(), "status": "unavailable", "reason": "fewer than 5 completed five-minute bars"}
+    current = today[-1]
+    recent = today[-4:-1]
+    true_ranges = []
+    previous_close = None
+    for bar in today[-15:]:
+        true_ranges.append(
+            max(bar.high - bar.low, abs(bar.high - previous_close), abs(bar.low - previous_close))
+            if previous_close is not None else bar.high - bar.low
+        )
+        previous_close = bar.close
+    atr = sum(true_ranges) / len(true_ranges) if true_ranges else None
+    swing_low = min(bar.low for bar in recent) if recent else None
+    if atr is None or swing_low is None or atr <= 0:
+        return {"symbol": symbol.upper(), "status": "unavailable", "reason": "insufficient structure or ATR data"}
+    stop = swing_low - (0.3 * atr)
+    if stop <= 0 or stop >= current.close:
+        return {"symbol": symbol.upper(), "status": "unavailable", "reason": "invalid structure stop"}
+    return {
+        "symbol": symbol.upper(),
+        "status": "ok",
+        "price": current.close,
+        "swing_low": swing_low,
+        "atr": atr,
+        "stop": stop,
+        "trailing_pct": (current.close - stop) / current.close * 100,
+        "reason": "recent three-bar swing low minus 0.3 five-minute ATR",
+    }

@@ -25,6 +25,17 @@ class IntradayModelsTest(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertIn("Opening-range breakout", [signal["model"] for signal in result["signals"] if signal["side"] == "BUY"])
 
+    def test_protection_plan_uses_recent_swing_low_and_atr(self) -> None:
+        start = datetime(2026, 9, 30, 9, 30, tzinfo=models.ET)
+        rows = [
+            candle(start + timedelta(minutes=5 * index), 100 + index * 0.2, 100.8 + index * 0.2, 99.8 + index * 0.2, 100.4 + index * 0.2)
+            for index in range(6)
+        ]
+        plan = models.protection_plan("TEST", rows, now=start + timedelta(minutes=30))
+        self.assertEqual(plan["status"], "ok")
+        self.assertLess(plan["stop"], plan["price"])
+        self.assertIn("swing low", plan["reason"])
+
     def test_opening_range_breakdown_is_a_paper_sell(self) -> None:
         start = datetime(2026, 9, 30, 9, 30, tzinfo=models.ET)
         rows = [candle(start + timedelta(minutes=5 * index), 100, 100.5, 99.5, 100.0) for index in range(6)]

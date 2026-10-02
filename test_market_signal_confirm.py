@@ -960,6 +960,7 @@ valid_until: 2026-06-16T14:40:00-05:00
                 _, _, delivered = confirm.recommendation_state_change_details(buy_report, "buy")
                 self.assertEqual(delivered, [("AMD", "PAPER_BUY")])
                 confirm.acknowledge_recommendation_delivery(delivered)
+                self.assertIn("AMD", confirm.intraday_buy_origins())
                 message, status, delivered = confirm.recommendation_state_change_details(cancel_report, "cancel")
 
             self.assertEqual(status, "recommendation state changed")

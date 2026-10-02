@@ -17,6 +17,7 @@ import subprocess
 from pathlib import Path
 
 import market_history_analysis as history_analysis
+import market_intraday_models
 import market_signal_confirm as confirm
 import market_schwab
 
@@ -132,6 +133,24 @@ def trailing_stop_limit_order_eligible(position: dict | None) -> tuple[bool, str
         return False, "share count unavailable"
     broker_text = ",".join(sorted(brokers - {"unknown"})) or "position"
     return True, f"{broker_text} trailing stop-limit percent review: {shares:g} shares"
+
+
+def suggested_intraday_stop(
+    entry: float | None,
+    price: float | None,
+    plan: dict,
+) -> tuple[float | None, float | None, float | None, list[str]]:
+    """Adapt a five-minute structure stop into the protective review format."""
+    stop = number(plan.get("stop"))
+    if price is None or price <= 0 or stop is None or stop <= 0 or stop >= price:
+        return None, None, None, [f"intraday protection unavailable: {plan.get('reason', 'invalid plan')}"]
+    if entry is not None and entry > 0 and price >= entry:
+        stop = max(stop, entry)
+    trailing_pct = trailing_pct_for_stop(price, stop)
+    return stop, stop * 0.995, trailing_pct, [
+        "intraday-origin position: 5-minute structure/ATR protection",
+        str(plan.get("reason") or "recent swing low with ATR buffer"),
+    ]
 
 
 def suggested_stop(entry: float | None, price: float | None, gain_pct: float | None, history: history_analysis.HistoryFeature | None, ticker: str) -> tuple[float | None, float | None, float | None, list[str]]:
@@ -308,6 +327,7 @@ def state_changes(rows: list[dict], state: dict) -> list[dict]:
             "existing_sell_floor": round(row["current_stop"], 2) if row.get("current_stop") is not None else None,
             "order_eligible": bool(row.get("order_eligible")),
             "order_eligibility": row.get("order_eligibility"),
+            "strategy": row.get("strategy", "swing_position"),
             "price": round(row["price"], 2) if row.get("price") is not None else None,
             "updated_at": now_ct().isoformat(),
         }
@@ -323,6 +343,13 @@ def build_rows(window: str) -> tuple[list[dict], list[str], list[dict]]:
     open_positions = confirm.read_positions()
     if not open_positions:
         return [], order_errors, open_buy_orders
+    intraday_origins = confirm.intraday_buy_origins()
+    intraday_config = None
+    if any(ticker in intraday_origins for ticker in open_positions):
+        try:
+            intraday_config = market_schwab.load_env()
+        except Exception as exc:  # noqa: BLE001
+            order_errors.append(f"intraday protection config unavailable: {type(exc).__name__}")
 
     for ticker in open_positions:
         confirm.TICKER_SECTOR.setdefault(ticker, "consumer")
@@ -351,7 +378,20 @@ def build_rows(window: str) -> tuple[list[dict], list[str], list[dict]]:
             histories.get(ticker),
         )
         threshold = int(confirm.sell_thresholds(window)["score"])
+        strategy = "swing_position"
         stop, limit, trailing_pct, stop_reasons = suggested_stop(entry, price, gain_pct, histories.get(ticker), ticker)
+        if ticker in intraday_origins and intraday_config is not None:
+            try:
+                payload = market_schwab.fetch_intraday_history(intraday_config, ticker, days=1, frequency=5)
+                candles = payload.get("candles") if isinstance(payload, dict) else []
+                plan = market_intraday_models.protection_plan(ticker, candles if isinstance(candles, list) else [])
+                if plan.get("status") == "ok":
+                    stop, limit, trailing_pct, stop_reasons = suggested_intraday_stop(entry, price, plan)
+                    strategy = "intraday"
+                else:
+                    stop_reasons = [f"intraday protection unavailable; using swing/position fallback: {plan.get('reason', 'unknown reason')}", *stop_reasons]
+            except Exception as exc:  # noqa: BLE001
+                stop_reasons = [f"intraday protection unavailable; using swing/position fallback: {type(exc).__name__}", *stop_reasons]
         orders = orders_by_symbol.get(ticker, [])
         current_stop, strongest = strongest_stop(orders)
         existing_trailing_orders = trailing_orders(orders)
@@ -388,6 +428,8 @@ def build_rows(window: str) -> tuple[list[dict], list[str], list[dict]]:
                 "sell_evidence": evidence,
                 "sell_blockers": blockers,
                 "stop_reasons": stop_reasons,
+                "strategy": strategy,
+                "intraday_origin": ticker in intraday_origins,
                 "quote_error": quote.error,
             }
         )
@@ -533,6 +575,7 @@ def write_report(rows: list[dict], changes: list[dict], order_errors: list[str],
                 f"- position: shares {row['shares']}; accounts {', '.join(str(a) for a in row['accounts'])}",
                 f"- quote: price {money(row['price'])}; day {confirm.pct(row['day_change_pct'])}; position {confirm.pct(row['gain_pct'])}",
                 f"- order_eligibility: {row['order_eligibility']}",
+                f"- strategy: {row.get('strategy', 'swing_position')}",
                 f"- existing_sell_floor: {money(row['current_stop'])} ({stop_gap_text(row['price'], row['current_stop'])})",
                 f"- existing_trailing_stop: {row.get('existing_trailing_text') or 'none'}",
                 f"- existing_trailing_pct: {pct_decimal(row.get('existing_trailing_pct'))}",
