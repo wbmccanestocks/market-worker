@@ -295,6 +295,8 @@ class TradePlan:
     stop_limit: float
     cushion_pct: float
     limit_gap_pct: float
+    trailing_buy_offset: float
+    trailing_buy_offset_pct: float
     notes: list[str]
 
 
@@ -1685,6 +1687,15 @@ def trade_plan_for_buy(
 
     entry_buffer_pct = 1.0 if action == "aggressive_buy" or ticker in LEVERAGED_ETFS else 0.6
     max_entry = quote.price * (1 + entry_buffer_pct / 100)
+    # Recommend a modest rebound trigger for a pre-fill trailing buy. Zero is
+    # valid when volatility is unavailable or does not justify a buffer.
+    volatility_pct = (
+        max(0.0, history.volatility_20d_pct)
+        if history and not history.error and history.volatility_20d_pct is not None
+        else 0.0
+    )
+    trailing_buy_offset_pct = min(entry_buffer_pct, volatility_pct * 0.25)
+    trailing_buy_offset = round(quote.price * trailing_buy_offset_pct / 100, 2)
     cushion = initial_stop_cushion_pct(history, action, ticker)
     stop = max_entry * (1 - cushion / 100)
     limit_gap_pct = 1.0 if cushion >= 5.0 else 0.5
@@ -1693,10 +1704,20 @@ def trade_plan_for_buy(
         f"max entry allows about {entry_buffer_pct:.1f}% above the quoted price",
         f"initial trailing stop-limit trail amount is {cushion:.1f}%",
         f"stop-limit offset is {limit_gap_pct:.1f}% below the trailing stop trigger",
+        f"pre-fill trailing buy offset is ${trailing_buy_offset:.2f} ({trailing_buy_offset_pct:.2f}%) from the trailing low",
     ]
     if action == "aggressive_buy" or ticker in LEVERAGED_ETFS:
         notes.append("aggressive/high-beta setup: use smaller size and expect wider intraday swings")
-    return TradePlan(max_entry=max_entry, stop=stop, stop_limit=stop_limit, cushion_pct=cushion, limit_gap_pct=limit_gap_pct, notes=notes)
+    return TradePlan(
+        max_entry=max_entry,
+        stop=stop,
+        stop_limit=stop_limit,
+        cushion_pct=cushion,
+        limit_gap_pct=limit_gap_pct,
+        trailing_buy_offset=trailing_buy_offset,
+        trailing_buy_offset_pct=trailing_buy_offset_pct,
+        notes=notes,
+    )
 
 
 def trailing_stop_limit_plan_text(plan: TradePlan) -> str:
@@ -1704,6 +1725,13 @@ def trailing_stop_limit_plan_text(plan: TradePlan) -> str:
         f"post_fill_trailing_stop_limit trail {plan.cushion_pct:.1f}% "
         f"limit_offset {plan.limit_gap_pct:.1f}% "
         f"(max_entry {money(plan.max_entry)}; stop_ref {money(plan.stop)}; limit_ref {money(plan.stop_limit)})"
+    )
+
+
+def trailing_buy_plan_text(plan: TradePlan) -> str:
+    return (
+        f"pre_fill_trailing_buy offset ${plan.trailing_buy_offset:.2f} "
+        f"({plan.trailing_buy_offset_pct:.2f}%; trigger after rebound from trailing low)"
     )
 
 
@@ -3837,6 +3865,7 @@ def build_report(
             if not plan:
                 continue
             lines.append(f"- {row[2]}: {trailing_stop_limit_plan_text(plan)}")
+            lines.append(f"- {row[2]}: {trailing_buy_plan_text(plan)}")
             lines.extend(f"  - {note}" for note in plan.notes)
     if existing_position_notes:
         lines.extend(["", "## existing_position_gate"])
@@ -3902,6 +3931,7 @@ def build_report(
         plan = trade_plans.get(ticker)
         if plan:
             lines.append(f"- trade_plan: {trailing_stop_limit_plan_text(plan)}")
+            lines.append(f"- trailing_buy_plan: {trailing_buy_plan_text(plan)}")
             lines.append("- trade_plan_notes:")
             lines.extend(f"  - {note}" for note in plan.notes)
         if ticker in catalyst_events:

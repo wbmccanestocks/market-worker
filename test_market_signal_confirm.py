@@ -371,6 +371,17 @@ class MarketSignalConfirmTest(unittest.TestCase):
         self.assertLess(plan.stop_limit, plan.stop)
         self.assertEqual(plan.limit_gap_pct, 0.5)
         self.assertIn("post_fill_trailing_stop_limit trail 3.0% limit_offset 0.5%", confirm.trailing_stop_limit_plan_text(plan))
+        self.assertAlmostEqual(plan.trailing_buy_offset_pct, 0.5)
+        self.assertAlmostEqual(plan.trailing_buy_offset, 0.51)
+        self.assertIn("pre_fill_trailing_buy offset $0.51 (0.50%", confirm.trailing_buy_plan_text(plan))
+
+    def test_buy_trade_plan_allows_zero_trailing_buy_offset_without_history(self) -> None:
+        plan = confirm.trade_plan_for_buy("buy", "AAPL", quote("AAPL", 100.0), None)
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(plan.trailing_buy_offset_pct, 0.0)
+        self.assertEqual(plan.trailing_buy_offset, 0.0)
+        self.assertIn("pre_fill_trailing_buy offset $0.00 (0.00%", confirm.trailing_buy_plan_text(plan))
 
     def test_catalyst_calendar_extracts_earnings_event_and_blocks_buy(self) -> None:
         with TemporaryDirectory() as tmpdir:
