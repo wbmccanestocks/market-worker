@@ -36,6 +36,7 @@ FRACTIONAL_PRICE_ACTIONS = {
     "manual_fractional_protective_price",
 }
 NON_REPORTING_ACTIONS = {"leave_existing_order"}
+TRAILING_OFFSET_MISMATCH_RATIO = 0.10
 
 
 def now_ct() -> dt.datetime:
@@ -183,6 +184,45 @@ def strongest_stop(orders: list[dict]) -> tuple[float | None, dict | None]:
     return best_stop, best_order
 
 
+def trailing_orders(orders: list[dict]) -> list[dict]:
+    return [
+        order for order in orders
+        if str(order.get("type") or "").lower().startswith("trailing_stop")
+    ]
+
+
+def trailing_order_text(orders: list[dict]) -> str:
+    parts: list[str] = []
+    for order in trailing_orders(orders):
+        offset = number(order.get("trailing_pct"))
+        if offset is not None:
+            parts.append(f"{offset:g}%")
+            continue
+        offset = number(order.get("trailing_offset"))
+        if offset is not None:
+            unit = "" if order.get("trailing_offset_type") == "percent" else " value"
+            parts.append(f"{offset:g}{unit}")
+            continue
+        parts.append("offset unavailable")
+    return ", ".join(parts) if parts else "none"
+
+
+def existing_trailing_pct(orders: list[dict]) -> float | None:
+    """Return the first broker-reported percentage trailing offset."""
+    for order in trailing_orders(orders):
+        offset = number(order.get("trailing_pct"))
+        if offset is not None and offset > 0:
+            return offset
+    return None
+
+
+def trailing_offset_mismatch(current: float | None, suggested: float | None) -> bool:
+    """Flag a material relative difference between existing and suggested trails."""
+    if current is None or suggested is None or suggested <= 0:
+        return False
+    return abs(current - suggested) / suggested > TRAILING_OFFSET_MISMATCH_RATIO
+
+
 def classify_order_review(
     ticker: str,
     current_stop: float | None,
@@ -192,6 +232,9 @@ def classify_order_review(
     evidence: list[str],
     orders: list[dict],
     order_eligible: bool,
+    existing_trailing_orders: list[dict] | None = None,
+    suggested_trailing_pct: float | None = None,
+    existing_trailing_pct_value: float | None = None,
 ) -> str:
     if not order_eligible:
         if sell_score >= sell_threshold and evidence:
@@ -201,6 +244,10 @@ def classify_order_review(
         return "insufficient_data"
     if sell_score >= sell_threshold and evidence:
         return "manual_exit_review"
+    if trailing_offset_mismatch(existing_trailing_pct_value, suggested_trailing_pct):
+        return "adjust_trailing_stop"
+    if existing_trailing_orders:
+        return "leave_existing_order"
     if suggested is None:
         return "insufficient_data"
     if not orders:
@@ -307,8 +354,14 @@ def build_rows(window: str) -> tuple[list[dict], list[str], list[dict]]:
         stop, limit, trailing_pct, stop_reasons = suggested_stop(entry, price, gain_pct, histories.get(ticker), ticker)
         orders = orders_by_symbol.get(ticker, [])
         current_stop, strongest = strongest_stop(orders)
+        existing_trailing_orders = trailing_orders(orders)
+        existing_trailing_pct_value = existing_trailing_pct(existing_trailing_orders)
         order_eligible, order_eligibility = trailing_stop_limit_order_eligible(position)
-        action = classify_order_review(ticker, current_stop, stop, sell_score, threshold, evidence, orders, order_eligible)
+        action = classify_order_review(
+            ticker, current_stop, stop, sell_score, threshold, evidence, orders,
+            order_eligible, existing_trailing_orders,
+            trailing_pct, existing_trailing_pct_value,
+        )
         rows.append(
             {
                 "ticker": ticker,
@@ -322,11 +375,14 @@ def build_rows(window: str) -> tuple[list[dict], list[str], list[dict]]:
                 "suggested_stop": stop,
                 "suggested_stop_limit": limit,
                 "suggested_trailing_pct": trailing_pct,
+                "existing_trailing_pct": existing_trailing_pct_value,
                 "current_stop": current_stop,
                 "order_eligible": order_eligible,
                 "order_eligibility": order_eligibility,
                 "strongest_order": strongest,
                 "open_sell_orders": orders,
+                "existing_trailing_orders": existing_trailing_orders,
+                "existing_trailing_text": trailing_order_text(existing_trailing_orders),
                 "sell_score": sell_score,
                 "sell_threshold": threshold,
                 "sell_evidence": evidence,
@@ -337,19 +393,26 @@ def build_rows(window: str) -> tuple[list[dict], list[str], list[dict]]:
         )
     priority = {
         "manual_exit_review": 0,
-        "consider_raise_stop": 1,
-        "consider_initial_protective_stop": 2,
-        "consider_add_protective_stop": 3,
-        "manual_fractional_exit_review": 4,
-        "manual_fractional_protective_price": 5,
-        "leave_existing_order": 6,
-        "insufficient_data": 7,
+        "adjust_trailing_stop": 1,
+        "consider_raise_stop": 2,
+        "consider_initial_protective_stop": 3,
+        "consider_add_protective_stop": 4,
+        "manual_fractional_exit_review": 5,
+        "manual_fractional_protective_price": 6,
+        "leave_existing_order": 7,
+        "insufficient_data": 8,
     }
     rows.sort(key=lambda row: (priority.get(row["action"], 9), row["ticker"]))
     return rows, order_errors, open_buy_orders
 
 
 def summary_line(row: dict, prefix: str = "") -> str:
+    if row.get("action") == "adjust_trailing_stop":
+        return (
+            f"- {prefix}adjust_trailing_stop: {row['ticker']} "
+            f"change trailing offset from {trailing_offset_decimal(row.get('existing_trailing_pct'))} "
+            f"to {trailing_offset_decimal(row.get('suggested_trailing_pct'))}"
+        )
     if row.get("action") == "consider_raise_stop":
         return (
             f"- {prefix}consider_raise_stop_floor: {row['ticker']} "
@@ -377,6 +440,11 @@ def limit_offset_pct(stop: float | None, limit: float | None) -> float | None:
 
 def pct_decimal(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.1f}%"
+
+
+
+def trailing_offset_decimal(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.2f}%"
 
 
 def trailing_stop_limit_text(row: dict) -> str:
@@ -466,6 +534,8 @@ def write_report(rows: list[dict], changes: list[dict], order_errors: list[str],
                 f"- quote: price {money(row['price'])}; day {confirm.pct(row['day_change_pct'])}; position {confirm.pct(row['gain_pct'])}",
                 f"- order_eligibility: {row['order_eligibility']}",
                 f"- existing_sell_floor: {money(row['current_stop'])} ({stop_gap_text(row['price'], row['current_stop'])})",
+                f"- existing_trailing_stop: {row.get('existing_trailing_text') or 'none'}",
+                f"- existing_trailing_pct: {pct_decimal(row.get('existing_trailing_pct'))}",
                 f"- sell_rule_score: {row['sell_score']}/{row['sell_threshold']}",
             ]
         )
@@ -513,6 +583,12 @@ def notification_rows(rows: list[dict], changes: list[dict], force: bool) -> lis
 
 
 def notification_line(row: dict) -> str:
+    if row.get("action") == "adjust_trailing_stop":
+        return (
+            f"{row['ticker']}: adjust trailing offset from "
+            f"{trailing_offset_decimal(row.get('existing_trailing_pct'))} to "
+            f"{trailing_offset_decimal(row.get('suggested_trailing_pct'))}"
+        )
     if row.get("action") == "consider_raise_stop":
         return (
             f"{row['ticker']}: consider_raise_stop_floor "

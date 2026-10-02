@@ -5,9 +5,65 @@ from unittest import mock
 
 import market_history_analysis as history
 import market_protective_order_review as review
+import market_schwab
 
 
 class MarketProtectiveOrderReviewTest(unittest.TestCase):
+    def test_normalize_open_orders_preserves_percent_trailing_offset(self) -> None:
+        orders = market_schwab.normalize_open_orders(
+            [{
+                "orderId": "1",
+                "status": "WORKING",
+                "orderType": "TRAILING_STOP",
+                "stopPriceOffset": 2.5,
+                "stopPriceLinkType": "PERCENT",
+                "orderLegCollection": [{
+                    "instruction": "SELL",
+                    "quantity": 3,
+                    "instrument": {"symbol": "NKE"},
+                }],
+            }]
+        )
+        self.assertEqual(orders[0]["trailing_pct"], 2.5)
+        self.assertEqual(orders[0]["trailing_offset_type"], "percent")
+
+    def test_existing_trailing_order_suppresses_duplicate_protective_suggestion(self) -> None:
+        trailing = [{"type": "trailing_stop", "trailing_pct": 2.5}]
+        action = review.classify_order_review(
+            ticker="NKE", current_stop=None, suggested=98.0,
+            sell_score=1, sell_threshold=4, evidence=[], orders=trailing,
+            order_eligible=True, existing_trailing_orders=trailing,
+        )
+        self.assertEqual(action, "leave_existing_order")
+        self.assertEqual(review.trailing_order_text(trailing), "2.5%")
+
+    def test_relative_trailing_offset_gap_over_ten_percent_requires_change(self) -> None:
+        action = review.classify_order_review(
+            ticker="TQQQ", current_stop=None, suggested=99.11,
+            sell_score=1, sell_threshold=4, evidence=[], orders=[
+                {"type": "trailing_stop", "trailing_pct": 1.0}
+            ],
+            order_eligible=True,
+            existing_trailing_orders=[{"type": "trailing_stop", "trailing_pct": 1.0}],
+            suggested_trailing_pct=0.89,
+            existing_trailing_pct_value=1.0,
+        )
+        self.assertEqual(action, "adjust_trailing_stop")
+        self.assertTrue(review.trailing_offset_mismatch(1.0, 0.89))
+        self.assertFalse(review.trailing_offset_mismatch(1.0, 0.95))
+
+    def test_trailing_offset_notification_states_exact_change(self) -> None:
+        row = {
+            "ticker": "NVD",
+            "action": "adjust_trailing_stop",
+            "existing_trailing_pct": 1.0,
+            "suggested_trailing_pct": 0.89,
+        }
+        self.assertEqual(
+            review.notification_line(row),
+            "NVD: adjust trailing offset from 1.00% to 0.89%",
+        )
+
     def test_trailing_stop_protects_some_profit_on_green_position(self) -> None:
         feature = history.HistoryFeature(
             symbol="LOW",

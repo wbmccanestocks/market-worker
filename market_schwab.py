@@ -589,6 +589,27 @@ def normalized_order_status(value: object) -> str:
     return str(value or "unknown").strip().lower().replace(" ", "_")
 
 
+def trailing_offset_fields(order: dict) -> tuple[float | None, str | None]:
+    """Return a Schwab trailing offset and its unit without losing broker data."""
+    raw_offset = order.get("stopPriceOffset")
+    if raw_offset is None:
+        raw_offset = order.get("stopPriceOffsetPercentage")
+    offset = number(raw_offset)
+    raw_kind = (
+        order.get("stopPriceLinkType")
+        or order.get("stopPriceOffsetType")
+        or order.get("trailingOffsetType")
+    )
+    kind = str(raw_kind).strip().lower() if raw_kind is not None else None
+    if kind and "percent" in kind:
+        kind = "percent"
+    elif kind and ("value" in kind or "dollar" in kind or kind == "amount"):
+        kind = "value"
+    elif order.get("stopPriceOffsetPercentage") is not None:
+        kind = "percent"
+    return offset, kind
+
+
 def normalize_open_orders(payload: object, account_label: str = "schwab") -> list[dict]:
     """Reduce Schwab order responses to non-sensitive fields needed for stop review."""
     source_rows = payload if isinstance(payload, list) else []
@@ -610,6 +631,7 @@ def normalize_open_orders(payload: object, account_label: str = "schwab") -> lis
             instruction = str(leg.get("instruction") or "").upper().strip()
             if not symbol or not instruction:
                 continue
+            trailing_offset, trailing_offset_type = trailing_offset_fields(order)
             normalized.append(
                 {
                     "id": str(order.get("orderId") or "")[:80] or None,
@@ -622,6 +644,9 @@ def normalize_open_orders(payload: object, account_label: str = "schwab") -> lis
                     "cumulative_quantity": number(order.get("filledQuantity")),
                     "price": number(order.get("price")),
                     "stop_price": number(order.get("stopPrice")),
+                    "trailing_offset": trailing_offset,
+                    "trailing_offset_type": trailing_offset_type,
+                    "trailing_pct": trailing_offset if trailing_offset_type == "percent" else None,
                     "entered_at": order.get("enteredTime"),
                     "account_label": sanitized_account_id(order.get("accountNumber")) or account_label,
                 }
