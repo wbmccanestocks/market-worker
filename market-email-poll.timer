@@ -1,0 +1,11 @@
+[Unit]
+Description=Run OpenClaw market-worker Gmail poller every minute
+
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=60
+AccuracySec=5
+Unit=market-email-poll.service
+
+[Install]
+WantedBy=timers.target

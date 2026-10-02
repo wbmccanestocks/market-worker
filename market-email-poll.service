@@ -1,0 +1,12 @@
+[Unit]
+Description=OpenClaw market-worker Gmail poller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/pi/.openclaw/workspace/market-worker
+ExecStart=/home/pi/.openclaw/workspace/market-worker/run-market-email-poll.sh
+Environment=GWS=/home/pi/.npm-global/bin/gws
+Environment=MARKET_EMAIL_QUERY=newer_than:2d
+Environment=MARKET_EMAIL_MAX=20

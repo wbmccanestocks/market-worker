@@ -1,0 +1,10 @@
+market-robinhood-positions.json
+market-robinhood-positions.tmp
+market-schwab-positions.json
+market-schwab-positions.json.tmp
+market-history-cache.json
+market-history-cache.tmp
+
+__pycache__/
+*.pyc
+.pytest_cache/

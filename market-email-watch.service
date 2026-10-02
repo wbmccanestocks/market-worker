@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenClaw market-worker Gmail watch listener
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pi/.openclaw/workspace/market-worker
+ExecStart=/home/pi/.openclaw/workspace/market-worker/run-market-email-watch.sh
+Restart=always
+RestartSec=15
+Environment=GWS=/home/pi/.npm-global/bin/gws
+Environment=GWS_PROJECT=openclaw-integration-496522
+
+[Install]
+WantedBy=default.target
