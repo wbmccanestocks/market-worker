@@ -36,6 +36,16 @@ class IntradayModelsTest(unittest.TestCase):
         self.assertLess(plan["stop"], plan["price"])
         self.assertIn("swing low", plan["reason"])
 
+    def test_buy_analysis_includes_post_fill_trailing_stop_recommendation(self) -> None:
+        start = datetime(2026, 9, 30, 9, 30, tzinfo=models.ET)
+        rows = [
+            candle(start + timedelta(minutes=5 * index), 100 + index * 0.2, 100.8 + index * 0.2, 99.8 + index * 0.2, 100.4 + index * 0.2)
+            for index in range(10)
+        ]
+        result = models.analyze("TEST", rows, now=start + timedelta(minutes=50))
+        self.assertEqual(result["protection"]["status"], "ok")
+        self.assertGreater(result["protection"]["trailing_pct"], 0)
+
     def test_opening_range_breakdown_is_a_paper_sell(self) -> None:
         start = datetime(2026, 9, 30, 9, 30, tzinfo=models.ET)
         rows = [candle(start + timedelta(minutes=5 * index), 100, 100.5, 99.5, 100.0) for index in range(6)]

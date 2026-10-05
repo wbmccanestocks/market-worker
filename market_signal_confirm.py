@@ -1735,6 +1735,19 @@ def trailing_buy_plan_text(plan: TradePlan) -> str:
     )
 
 
+def intraday_buy_protection_text(paper: dict) -> str:
+    """Return the paired post-fill intraday trailing-stop recommendation."""
+    protection = paper.get("protection") if isinstance(paper, dict) else None
+    if not isinstance(protection, dict) or protection.get("status") != "ok":
+        reason = protection.get("reason", "unavailable") if isinstance(protection, dict) else "unavailable"
+        return f"after-buy intraday trailing stop: unavailable ({reason})"
+    trailing_pct = protection.get("trailing_pct")
+    stop = protection.get("stop")
+    if not isinstance(trailing_pct, (int, float)) or not isinstance(stop, (int, float)):
+        return "after-buy intraday trailing stop: unavailable (missing calculated offset)"
+    return f"after-buy intraday trailing stop: {trailing_pct:.2f}% (suggested stop ${stop:.2f}; recent swing low minus 0.3 ATR)"
+
+
 MONTHS = {
     "jan": 1,
     "january": 1,
@@ -3828,7 +3841,8 @@ def build_report(
     for score, ticker, models in paper_cancel_buys:
         lines.append(f"- CANCEL BUY: {ticker} - score {score}; intraday bearish model ({', '.join(models)}) and no open position; research alert only")
     for score, ticker, models in paper_buys:
-        lines.append(f"- INTRADAY PAPER BUY: {ticker} - score {score}; models: {', '.join(models)}; research alert only")
+        protection_text = intraday_buy_protection_text(paper_intraday.get(ticker, {}))
+        lines.append(f"- INTRADAY PAPER BUY: {ticker} - score {score}; models: {', '.join(models)}; {protection_text}; research alert only")
     if sells:
         lines.extend(f"- {row[3]} (sell score {row[1]})" for row in sells)
     if buys:
@@ -3854,6 +3868,8 @@ def build_report(
             scores = paper.get("scores") or {}
             lines.append(f"### intraday paper {ticker}")
             lines.append(f"- signal_strength_scores: BUY {scores.get('BUY', 0)}; SELL {scores.get('SELL', 0)}; not a profitability forecast")
+            if any(signal.get("side") == "BUY" for signal in signals if isinstance(signal, dict)):
+                lines.append(f"- protection: {intraday_buy_protection_text(paper)}")
             lines.append(
                 f"- levels: close {metrics.get('last_close', 'n/a')}; OR high {metrics.get('opening_high', 'n/a')}; OR low {metrics.get('opening_low', 'n/a')}; VWAP {metrics.get('vwap', 'n/a')}"
             )

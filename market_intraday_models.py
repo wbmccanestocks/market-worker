@@ -85,6 +85,10 @@ def analyze(symbol: str, candles: list[dict], now: datetime | None = None) -> di
     volume_confirmed = current.volume >= average_bar_volume * 0.80
     result["status"] = "ok"
     result["metrics"] = {"last_close": round(current.close, 4), "opening_high": round(opening_high, 4), "opening_low": round(opening_low, 4), "vwap": round(current_vwap, 4) if current_vwap else None, "ema9": round(ema9, 4) if ema9 else None, "ema20": round(ema20, 4) if ema20 else None, "volume_confirmed": volume_confirmed}
+    # Keep the same structure/ATR protection used for an intraday-origin
+    # holding available to the BUY alert, so the user can set protection
+    # immediately after a fill.
+    result["protection"] = protection_plan(symbol, candles, now=now_et)
     signals: list[dict[str, str]] = []
     if current.close > opening_high and volume_confirmed:
         signals.append({"side": "BUY", "model": "Opening-range breakout", "reason": "close above first-30-minute high with volume confirmation"})

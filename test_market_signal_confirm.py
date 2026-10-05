@@ -383,6 +383,15 @@ class MarketSignalConfirmTest(unittest.TestCase):
         self.assertEqual(plan.trailing_buy_offset, 0.0)
         self.assertIn("pre_fill_trailing_buy offset $0.00 (0.00%", confirm.trailing_buy_plan_text(plan))
 
+    def test_intraday_buy_protection_text_states_suggested_trailing_stop(self) -> None:
+        text = confirm.intraday_buy_protection_text({"protection": {"status": "ok", "trailing_pct": 0.89, "stop": 13.06}})
+        self.assertIn("after-buy intraday trailing stop: 0.89%", text)
+        self.assertIn("suggested stop $13.06", text)
+
+    def test_intraday_buy_protection_text_explains_unavailable_offset(self) -> None:
+        text = confirm.intraday_buy_protection_text({"protection": {"status": "unavailable", "reason": "insufficient data"}})
+        self.assertIn("after-buy intraday trailing stop: unavailable", text)
+
     def test_catalyst_calendar_extracts_earnings_event_and_blocks_buy(self) -> None:
         with TemporaryDirectory() as tmpdir:
             now = dt.datetime(2026, 6, 29, 9, 0, tzinfo=confirm.TZ)
