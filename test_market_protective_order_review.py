@@ -72,7 +72,37 @@ class MarketProtectiveOrderReviewTest(unittest.TestCase):
         }
         self.assertEqual(
             review.notification_line(row),
-            "NVD: adjust trailing offset from 1.00% to 0.89%",
+            "NVD: CHANGE trailing stop from 1.00% to 0.89%",
+        )
+
+    def test_action_instruction_is_plain_language(self) -> None:
+        self.assertEqual(
+            review.action_instruction({
+                "ticker": "CRK",
+                "action": "consider_raise_stop",
+                "current_stop": 13.06,
+                "suggested_stop": 13.10,
+            }),
+            "CRK: RAISE protective stop from $13.06 to $13.10",
+        )
+        self.assertEqual(
+            review.action_instruction({
+                "ticker": "NVD",
+                "action": "consider_initial_protective_stop",
+                "suggested_stop": 100.0,
+                "suggested_trailing_pct": 0.89,
+            }),
+            "NVD: SET protective stop at $100.00 (trailing offset 0.89%)",
+        )
+
+    def test_action_instruction_can_say_keep_existing_protection(self) -> None:
+        self.assertEqual(
+            review.action_instruction({
+                "ticker": "TQQQ",
+                "action": "leave_existing_order",
+                "existing_trailing_text": "2%",
+            }),
+            "TQQQ: KEEP existing protection (2%)",
         )
 
     def test_trailing_stop_protects_some_profit_on_green_position(self) -> None:
@@ -127,9 +157,7 @@ class MarketProtectiveOrderReviewTest(unittest.TestCase):
 
         summary = review.notification_summary([row], [row], force=False)
 
-        self.assertIn("LOW: consider_raise_stop_floor $217.50 -> $220.12", summary)
-        self.assertIn("TrailingStopLimit trail 2% limit_offset 0.5%", summary)
-        self.assertIn("limit_ref $219.02", summary)
+        self.assertIn("LOW: RAISE protective stop from $217.50 to $220.12", summary)
 
     def test_leave_existing_order_is_not_a_reportable_change(self) -> None:
         row = {
@@ -189,9 +217,7 @@ class MarketProtectiveOrderReviewTest(unittest.TestCase):
 
         summary = review.notification_summary([row], [row], force=False)
 
-        self.assertIn("LOW: consider_initial_protective_stop TrailingStopLimit trail 2%", summary)
-        self.assertIn("limit_offset 0.5%", summary)
-        self.assertIn("stop_ref $220.86", summary)
+        self.assertIn("LOW: SET protective stop at $220.86 (trailing offset 1.70%)", summary)
 
     def test_fractional_position_is_trailing_stop_limit_eligible_for_review(self) -> None:
         eligible, reason = review.trailing_stop_limit_order_eligible(

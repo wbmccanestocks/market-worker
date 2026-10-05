@@ -449,22 +449,33 @@ def build_rows(window: str) -> tuple[list[dict], list[str], list[dict]]:
 
 
 def summary_line(row: dict, prefix: str = "") -> str:
-    if row.get("action") == "adjust_trailing_stop":
-        return (
-            f"- {prefix}adjust_trailing_stop: {row['ticker']} "
-            f"change trailing offset from {trailing_offset_decimal(row.get('existing_trailing_pct'))} "
-            f"to {trailing_offset_decimal(row.get('suggested_trailing_pct'))}"
+    return f"- {prefix}{action_instruction(row)}"
+
+
+def action_instruction(row: dict) -> str:
+    """Return the plain-language action a user should take."""
+    ticker = row["ticker"]
+    action = row.get("action")
+    current = money(row.get("current_stop"))
+    suggested = money(row.get("suggested_stop"))
+    existing = trailing_offset_decimal(row.get("existing_trailing_pct"))
+    recommended = trailing_offset_decimal(row.get("suggested_trailing_pct"))
+    if action in {"manual_exit_review", "manual_fractional_exit_review"}:
+        return f"{ticker}: SELL/EXIT — sell evidence is active; review the position now"
+    if action == "adjust_trailing_stop":
+        return f"{ticker}: CHANGE trailing stop from {existing} to {recommended}"
+    if action == "consider_raise_stop":
+        return f"{ticker}: RAISE protective stop from {current} to {suggested}"
+    if action in {"consider_initial_protective_stop", "manual_fractional_protective_price"}:
+        return f"{ticker}: SET protective stop at {suggested} (trailing offset {recommended})"
+    if action == "consider_add_protective_stop":
+        return f"{ticker}: ADD protective stop at {suggested} (trailing offset {recommended})"
+    if action == "leave_existing_order":
+        protection = row.get("existing_trailing_text") or (
+            f"stop {current}" if current != "n/a" else "existing order"
         )
-    if row.get("action") == "consider_raise_stop":
-        return (
-            f"- {prefix}consider_raise_stop_floor: {row['ticker']} "
-            f"{money(row.get('current_stop'))} -> {money(row.get('suggested_stop'))} "
-            f"({trailing_stop_limit_text(row)})"
-        )
-    label = display_action(row["action"])
-    if row.get("suggested_trailing_pct") is not None:
-        return f"- {prefix}{label}: {row['ticker']} {trailing_stop_limit_text(row)}"
-    return f"- {prefix}{label}: {row['ticker']}"
+        return f"{ticker}: KEEP existing protection ({protection})"
+    return f"{ticker}: NO ACTION — protection recommendation unavailable"
 
 
 def stop_gap_text(price: float | None, stop: float | None) -> str:
@@ -571,7 +582,7 @@ def write_report(rows: list[dict], changes: list[dict], order_errors: list[str],
         lines.extend(
             [
                 f"### {row['ticker']}",
-                f"- action: {display_action(row['action'])}",
+                f"- what_to_do: {action_instruction(row)}",
                 f"- position: shares {row['shares']}; accounts {', '.join(str(a) for a in row['accounts'])}",
                 f"- quote: price {money(row['price'])}; day {confirm.pct(row['day_change_pct'])}; position {confirm.pct(row['gain_pct'])}",
                 f"- order_eligibility: {row['order_eligibility']}",
@@ -626,19 +637,7 @@ def notification_rows(rows: list[dict], changes: list[dict], force: bool) -> lis
 
 
 def notification_line(row: dict) -> str:
-    if row.get("action") == "adjust_trailing_stop":
-        return (
-            f"{row['ticker']}: adjust trailing offset from "
-            f"{trailing_offset_decimal(row.get('existing_trailing_pct'))} to "
-            f"{trailing_offset_decimal(row.get('suggested_trailing_pct'))}"
-        )
-    if row.get("action") == "consider_raise_stop":
-        return (
-            f"{row['ticker']}: consider_raise_stop_floor "
-            f"{money(row.get('current_stop'))} -> {money(row.get('suggested_stop'))} "
-            f"({trailing_stop_limit_text(row)})"
-        )
-    return f"{row['ticker']}: {display_action(row['action'])} {trailing_stop_limit_text(row)}"
+    return action_instruction(row)
 
 
 def notification_summary(rows: list[dict], changes: list[dict], force: bool) -> str:
