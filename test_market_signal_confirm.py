@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -931,6 +932,23 @@ valid_until: 2026-06-16T14:40:00-05:00
         self.assertIn("whole-share protective-stop gate", filtered["COSTLY"]["buy_gate_blocker"])
         self.assertEqual(filtered["HELD"]["signals"], signals["HELD"]["signals"])
 
+    def test_price_blocked_intraday_buy_does_not_become_cancel_buy(self) -> None:
+        signals = {
+            "COSTLY": {
+                "signals": [
+                    {"side": "BUY", "model": "VWAP reclaim"},
+                    {"side": "SELL", "model": "VWAP rejection"},
+                ]
+            }
+        }
+        quotes = {
+            "COSTLY": confirm.Quote("COSTLY", 150.00, 149.0, 1.0, 149.5, 200_000, 1_000_000, 0.2, None),
+        }
+        price_gated = confirm.apply_intraday_paper_buy_price_gates(signals, quotes, set(), 1_000.0)
+        position_gated = confirm.apply_intraday_paper_position_gate(price_gated, {})
+        self.assertEqual(position_gated["COSTLY"]["signals"], [])
+        self.assertIn("no CANCEL BUY", position_gated["COSTLY"]["position_gate_blocker"])
+
     def test_unheld_intraday_sell_becomes_cancel_buy(self) -> None:
         signals = {
             "UNHELD": {"signals": [{"side": "SELL", "model": "VWAP rejection", "reason": "weakness"}]},
@@ -1031,6 +1049,32 @@ valid_until: 2026-06-16T14:40:00-05:00
             self.assertIsNone(message)
             self.assertEqual(status, "telegram notification skipped: no recommendation state changes")
             self.assertEqual(delivered, [])
+
+    def test_cancel_buy_ignores_stale_prior_state_without_delivered_origin(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / "market-recommendation-state.json"
+            cancel_report = Path(tmpdir) / "cancel.md"
+            state_path.write_text(
+                json.dumps({
+                    "active": {
+                        "AMD": {"action": "PAPER_BUY", "notified": True}
+                    }
+                }),
+                encoding="utf-8",
+            )
+            cancel_report.write_text(
+                "## decisions\n- CANCEL BUY: AMD - intraday bearish model; research alert only\n",
+                encoding="utf-8",
+            )
+            with (
+                patch.object(confirm, "RECOMMENDATION_STATE_FILE", state_path),
+                patch.object(confirm, "read_positions", return_value={}),
+            ):
+                message, status, delivered = confirm.recommendation_state_change_details(cancel_report, "cancel")
+
+        self.assertIsNone(message)
+        self.assertEqual(status, "telegram notification skipped: no recommendation state changes")
+        self.assertEqual(delivered, [])
 
     def test_unheld_paper_sell_is_not_renotified_after_recurrence(self) -> None:
         with TemporaryDirectory() as tmpdir:

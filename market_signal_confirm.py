@@ -3633,17 +3633,33 @@ def apply_intraday_paper_position_gate(
         record = dict(paper)
         signals = paper.get("signals") if isinstance(paper.get("signals"), list) else []
         if ticker not in open_positions:
-            converted = []
-            for signal in signals:
-                if isinstance(signal, dict) and signal.get("side") == "SELL":
-                    converted.append({
-                        **signal,
-                        "side": "CANCEL_BUY",
-                        "reason": "no open position; cancel any pending BUY rather than issue a SELL recommendation",
-                    })
-                else:
-                    converted.append(signal)
-            signals = converted
+            # If the BUY side was rejected by a price/account gate, there was
+            # no eligible BUY recommendation to cancel. Do not turn a
+            # remaining bearish model into a misleading CANCEL BUY alert.
+            if record.get("buy_gate_blocker"):
+                removed = [
+                    signal for signal in signals
+                    if isinstance(signal, dict) and signal.get("side") == "SELL"
+                ]
+                if removed:
+                    record["suppressed_sell_models"] = [str(signal.get("model")) for signal in removed]
+                signals = [
+                    signal for signal in signals
+                    if not (isinstance(signal, dict) and signal.get("side") == "SELL")
+                ]
+                record["position_gate_blocker"] = "BUY was blocked by price/account eligibility; no CANCEL BUY"
+            else:
+                converted = []
+                for signal in signals:
+                    if isinstance(signal, dict) and signal.get("side") == "SELL":
+                        converted.append({
+                            **signal,
+                            "side": "CANCEL_BUY",
+                            "reason": "no open position; cancel any pending BUY rather than issue a SELL recommendation",
+                        })
+                    else:
+                        converted.append(signal)
+                signals = converted
         record["signals"] = signals
         gated[ticker] = record
     return gated
@@ -4237,11 +4253,9 @@ def recommendation_state_change_details(report_path: Path, summary: str) -> tupl
             # producing standalone CANCEL BUY notifications for symbols the
             # user never received a BUY recommendation for (including BUYs
             # omitted by the six-item Telegram cap).
-            prior_buy_was_sent = bool(
-                prior
-                and prior.get("action") in {"BUY", "PAPER_BUY"}
-                and prior.get("notified", False)
-            )
+            # CANCEL BUY is an intraday-only reversal. Require the
+            # durable delivery marker, not merely a stale active BUY record.
+            prior_buy_was_sent = ticker in intraday_buy_origins()
             should_notify = prior_buy_was_sent and (not same_action or not notified)
             if not prior_buy_was_sent:
                 # Suppress this state transition once; a later BUY transition
