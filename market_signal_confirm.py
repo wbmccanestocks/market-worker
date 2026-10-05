@@ -4125,6 +4125,11 @@ def notification_detail(report_path: Path, ticker: str, action: str, decision_li
     text = report_path.read_text(encoding="utf-8", errors="replace")
     section_match = re.search(rf"(?ms)^### {re.escape(ticker)}\n(.*?)(?=^### |\Z)", text)
     section = section_match.group(1) if section_match else ""
+    intraday_section_match = re.search(
+        rf"(?ms)^### intraday paper {re.escape(ticker)}\n(.*?)(?=^### |\Z)",
+        text,
+    )
+    intraday_section = intraday_section_match.group(1) if intraday_section_match else ""
 
     catalyst = ""
     sources_path = report_path.with_name(f"{report_path.stem}-sources.json")
@@ -4160,6 +4165,12 @@ def notification_detail(report_path: Path, ticker: str, action: str, decision_li
             catalyst = "No distinct ticker-specific catalyst extracted; signal is driven by confirmed price and sector momentum."
 
     lines = [decision_line.removeprefix("- ")]
+    if action == "PAPER_BUY" and intraday_section:
+        for detail_line in intraday_section.splitlines():
+            detail = detail_line.removeprefix("- ").strip()
+            if detail.startswith(("pre-fill intraday trailing BUY:", "after-buy intraday trailing stop:", "protection:")):
+                if detail not in lines:
+                    lines.append(detail)
     if catalyst:
         lines.append(f"Catalyst/context: {catalyst[:260].rstrip()}")
     trade_plan_match = re.search(r"^- trade_plan:\s+(.+)$", section, flags=re.M)

@@ -962,6 +962,24 @@ valid_until: 2026-06-16T14:40:00-05:00
             _, active = confirm.parse_report_recommendations(report)
         self.assertEqual(active["AMD"]["action"], "CANCEL_BUY")
 
+    def test_channel_intraday_buy_includes_trailing_details_from_report_section(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            report = Path(tmpdir) / "report.md"
+            report.write_text(
+                "## decisions\n"
+                "- INTRADAY PAPER BUY: AMD - score 11; models: VWAP reclaim; research alert only\n"
+                "\n## intraday_paper_details\n"
+                "### intraday paper AMD\n"
+                "- pre-fill intraday trailing BUY: $0.51 (0.50%; trigger after rebound from trailing low)\n"
+                "- protection: after-buy intraday trailing stop: 0.89% (suggested stop $13.06; recent swing low minus 0.3 ATR)\n",
+                encoding="utf-8",
+            )
+            _, active = confirm.parse_report_recommendations(report)
+            detail = confirm.notification_detail(report, "AMD", active["AMD"]["action"], active["AMD"]["line"])
+
+        self.assertIn("pre-fill intraday trailing BUY: $0.51", detail)
+        self.assertIn("protection: after-buy intraday trailing stop: 0.89%", detail)
+
     def test_cancel_buy_requires_a_previously_delivered_buy(self) -> None:
         with TemporaryDirectory() as tmpdir:
             state_path = Path(tmpdir) / "market-recommendation-state.json"
