@@ -1771,6 +1771,18 @@ def intraday_trailing_buy_text(
     )
 
 
+def intraday_max_buy_price_text(
+    ticker: str,
+    quote: Quote,
+    history: history_analysis.HistoryFeature | None,
+) -> str:
+    """Return the maximum recommended entry price for an intraday BUY alert."""
+    plan = trade_plan_for_buy("buy", ticker, quote, history)
+    if plan is None:
+        return "max buy price: unavailable"
+    return f"max buy price: ${plan.max_entry:.2f}"
+
+
 def intraday_buy_protection_text(paper: dict) -> str:
     """Return the paired post-fill intraday trailing-stop recommendation."""
     protection = paper.get("protection") if isinstance(paper, dict) else None
@@ -3956,9 +3968,10 @@ def build_report(
     for score, ticker, models in paper_buys:
         protection_text = intraday_buy_protection_text(paper_intraday.get(ticker, {}))
         trailing_buy_text = intraday_trailing_buy_text(ticker, quotes[ticker], history_features.get(ticker))
+        max_buy_text = intraday_max_buy_price_text(ticker, quotes[ticker], history_features.get(ticker))
         lines.append(
-            f"- INTRADAY PAPER BUY: {ticker} - score {score}; models: {', '.join(models)}; "
-            f"{trailing_buy_text}; {protection_text}; research alert only"
+            f"- INTRADAY PAPER BUY: {ticker} - {max_buy_text}; {trailing_buy_text}; "
+            f"{protection_text}; research alert only"
         )
     if sells:
         lines.extend(f"- {row[3]} (sell score {row[1]})" for row in sells)
@@ -4226,12 +4239,6 @@ def notification_detail(report_path: Path, ticker: str, action: str, decision_li
     text = report_path.read_text(encoding="utf-8", errors="replace")
     section_match = re.search(rf"(?ms)^### {re.escape(ticker)}\n(.*?)(?=^### |\Z)", text)
     section = section_match.group(1) if section_match else ""
-    intraday_section_match = re.search(
-        rf"(?ms)^### intraday paper {re.escape(ticker)}\n(.*?)(?=^### |\Z)",
-        text,
-    )
-    intraday_section = intraday_section_match.group(1) if intraday_section_match else ""
-
     catalyst = ""
     sources_path = report_path.with_name(f"{report_path.stem}-sources.json")
     try:
@@ -4266,12 +4273,9 @@ def notification_detail(report_path: Path, ticker: str, action: str, decision_li
             catalyst = "No distinct ticker-specific catalyst extracted; signal is driven by confirmed price and sector momentum."
 
     lines = [decision_line.removeprefix("- ")]
-    if action == "PAPER_BUY" and intraday_section:
-        for detail_line in intraday_section.splitlines():
-            detail = detail_line.removeprefix("- ").strip()
-            if detail.startswith(("pre-fill intraday trailing BUY:", "after-buy intraday trailing stop:", "protection:")):
-                if detail not in lines:
-                    lines.append(detail)
+    # Intraday BUY decision lines already contain the pre-fill trailing BUY and
+    # after-buy protection recommendations. Keep the channel message compact;
+    # the detailed report remains available separately.
     if catalyst:
         lines.append(f"Catalyst/context: {catalyst[:260].rstrip()}")
     trade_plan_match = re.search(r"^- trade_plan:\s+(.+)$", section, flags=re.M)

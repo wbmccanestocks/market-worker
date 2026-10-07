@@ -1036,7 +1036,7 @@ valid_until: 2026-06-16T14:40:00-05:00
             report = Path(tmpdir) / "report.md"
             report.write_text(
                 "## decisions\n"
-                "- INTRADAY PAPER BUY: AMD - score 11; models: VWAP reclaim; research alert only\n"
+                "- INTRADAY PAPER BUY: AMD - max buy price: $13.25; pre-fill intraday trailing BUY: $0.51 (0.50%; trigger after rebound from trailing low); after-buy intraday trailing stop: 0.89% (suggested stop $13.06; recent swing low minus 0.3 ATR); research alert only\n"
                 "\n## intraday_paper_details\n"
                 "### intraday paper AMD\n"
                 "- pre-fill intraday trailing BUY: $0.51 (0.50%; trigger after rebound from trailing low)\n"
@@ -1046,8 +1046,12 @@ valid_until: 2026-06-16T14:40:00-05:00
             _, active = confirm.parse_report_recommendations(report)
             detail = confirm.notification_detail(report, "AMD", active["AMD"]["action"], active["AMD"]["line"])
 
-        self.assertIn("pre-fill intraday trailing BUY: $0.51", detail)
-        self.assertIn("protection: after-buy intraday trailing stop: 0.89%", detail)
+        self.assertIn("max buy price: $13.25", detail)
+        self.assertIn("pre-fill intraday trailing BUY: $0.51 (0.50%", detail)
+        self.assertIn("after-buy intraday trailing stop: 0.89%", detail)
+        self.assertEqual(detail.count("$13.25"), 1)
+        self.assertEqual(detail.count("$0.51"), 1)
+        self.assertEqual(detail.count("after-buy intraday trailing stop"), 1)
 
     def test_cancel_buy_requires_a_previously_delivered_buy(self) -> None:
         with TemporaryDirectory() as tmpdir:
