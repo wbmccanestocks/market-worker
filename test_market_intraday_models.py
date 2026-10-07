@@ -45,6 +45,11 @@ class IntradayModelsTest(unittest.TestCase):
         result = models.analyze("TEST", rows, now=start + timedelta(minutes=50))
         self.assertEqual(result["protection"]["status"], "ok")
         self.assertGreater(result["protection"]["trailing_pct"], 0)
+        self.assertGreaterEqual(
+            result["protection"]["trailing_pct"],
+            result["protection"]["minimum_trailing_pct"],
+        )
+        self.assertIn("minimum 0.5 ATR", result["protection"]["reason"])
 
     def test_opening_range_breakdown_is_a_paper_sell(self) -> None:
         start = datetime(2026, 9, 30, 9, 30, tzinfo=models.ET)

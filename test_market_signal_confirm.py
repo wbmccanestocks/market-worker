@@ -402,6 +402,18 @@ class MarketSignalConfirmTest(unittest.TestCase):
         text = confirm.intraday_trailing_buy_text("AAPL", quote("AAPL", 100.0), None)
         self.assertIn("pre-fill intraday trailing BUY: $0.00 (0.00%", text)
 
+    def test_intraday_pre_fill_trail_is_capped_by_after_buy_protection(self) -> None:
+        feature = history.HistoryFeature(
+            symbol="AAPL", latest_close=100.0, sma5=101.0, sma20=98.0,
+            close_vs_sma20_pct=2.0, trend_20d_pct=4.0, volatility_20d_pct=2.0,
+            range_position_60d=0.7, bars=60,
+        )
+        text = confirm.intraday_trailing_buy_text(
+            "AAPL", quote("AAPL", 100.0), feature,
+            {"protection": {"status": "ok", "trailing_pct": 0.40}},
+        )
+        self.assertIn("pre-fill intraday trailing BUY: $0.40 (0.40%", text)
+
     def test_intraday_buy_protection_text_explains_unavailable_offset(self) -> None:
         text = confirm.intraday_buy_protection_text({"protection": {"status": "unavailable", "reason": "insufficient data"}})
         self.assertIn("after-buy intraday trailing stop: unavailable", text)

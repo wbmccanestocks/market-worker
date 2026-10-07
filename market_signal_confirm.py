@@ -1760,14 +1760,24 @@ def intraday_trailing_buy_text(
     ticker: str,
     quote: Quote,
     history: history_analysis.HistoryFeature | None,
+    paper: dict | None = None,
 ) -> str:
-    """Return the pre-fill trailing-buy offset for an intraday BUY alert."""
+    """Return the pre-fill trailing-buy offset for an intraday BUY alert.
+
+    The entry trail cannot be wider than the paired after-buy protection.
+    """
     plan = trade_plan_for_buy("buy", ticker, quote, history)
     if plan is None:
         return "pre-fill intraday trailing BUY: unavailable (missing quote)"
+    trailing_pct = plan.trailing_buy_offset_pct
+    protection = paper.get("protection") if isinstance(paper, dict) else None
+    protection_pct = protection.get("trailing_pct") if isinstance(protection, dict) else None
+    if isinstance(protection_pct, (int, float)) and protection_pct >= 0:
+        trailing_pct = min(trailing_pct, protection_pct)
+    trailing_offset = round(quote.price * trailing_pct / 100, 2)
     return (
-        f"pre-fill intraday trailing BUY: ${plan.trailing_buy_offset:.2f} "
-        f"({plan.trailing_buy_offset_pct:.2f}%; trigger after rebound from trailing low)"
+        f"pre-fill intraday trailing BUY: ${trailing_offset:.2f} "
+        f"({trailing_pct:.2f}%; trigger after rebound from trailing low)"
     )
 
 
@@ -3967,7 +3977,7 @@ def build_report(
         lines.append(f"- CANCEL BUY: {ticker} - score {score}; intraday bearish model ({', '.join(models)}) and no open position; research alert only")
     for score, ticker, models in paper_buys:
         protection_text = intraday_buy_protection_text(paper_intraday.get(ticker, {}))
-        trailing_buy_text = intraday_trailing_buy_text(ticker, quotes[ticker], history_features.get(ticker))
+        trailing_buy_text = intraday_trailing_buy_text(ticker, quotes[ticker], history_features.get(ticker), paper_intraday.get(ticker))
         max_buy_text = intraday_max_buy_price_text(ticker, quotes[ticker], history_features.get(ticker))
         lines.append(
             f"- INTRADAY PAPER BUY: {ticker} - {max_buy_text}; {trailing_buy_text}; "
@@ -3999,7 +4009,7 @@ def build_report(
             lines.append(f"### intraday paper {ticker}")
             lines.append(f"- signal_strength_scores: BUY {scores.get('BUY', 0)}; SELL {scores.get('SELL', 0)}; not a profitability forecast")
             if any(signal.get("side") == "BUY" for signal in signals if isinstance(signal, dict)):
-                lines.append(f"- {intraday_trailing_buy_text(ticker, quotes[ticker], history_features.get(ticker))}")
+                lines.append(f"- {intraday_trailing_buy_text(ticker, quotes[ticker], history_features.get(ticker), paper)}")
                 lines.append(f"- protection: {intraday_buy_protection_text(paper)}")
             lines.append(
                 f"- levels: close {metrics.get('last_close', 'n/a')}; OR high {metrics.get('opening_high', 'n/a')}; OR low {metrics.get('opening_low', 'n/a')}; VWAP {metrics.get('vwap', 'n/a')}"

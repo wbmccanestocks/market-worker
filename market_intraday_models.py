@@ -139,7 +139,14 @@ def protection_plan(symbol: str, candles: list[dict], now: datetime | None = Non
     swing_low = min(bar.low for bar in recent) if recent else None
     if atr is None or swing_low is None or atr <= 0:
         return {"symbol": symbol.upper(), "status": "unavailable", "reason": "insufficient structure or ATR data"}
-    stop = swing_low - (0.3 * atr)
+    raw_stop = swing_low - (0.3 * atr)
+    raw_trailing_pct = (current.close - raw_stop) / current.close * 100
+    # Avoid stops that sit inside ordinary five-minute noise.  The structure
+    # level remains the primary input, but the trail must be at least half an
+    # ATR wide, with a small absolute floor for very quiet candles.
+    minimum_trailing_pct = max(0.25, (0.5 * atr) / current.close * 100)
+    trailing_pct = max(raw_trailing_pct, minimum_trailing_pct)
+    stop = current.close * (1 - trailing_pct / 100)
     if stop <= 0 or stop >= current.close:
         return {"symbol": symbol.upper(), "status": "unavailable", "reason": "invalid structure stop"}
     return {
@@ -149,6 +156,9 @@ def protection_plan(symbol: str, candles: list[dict], now: datetime | None = Non
         "swing_low": swing_low,
         "atr": atr,
         "stop": stop,
-        "trailing_pct": (current.close - stop) / current.close * 100,
-        "reason": "recent three-bar swing low minus 0.3 five-minute ATR",
+        "raw_stop": raw_stop,
+        "raw_trailing_pct": raw_trailing_pct,
+        "minimum_trailing_pct": minimum_trailing_pct,
+        "trailing_pct": trailing_pct,
+        "reason": "recent three-bar swing low minus 0.3 ATR, with a minimum 0.5 ATR trail",
     }
