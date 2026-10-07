@@ -914,6 +914,34 @@ valid_until: 2026-06-16T14:40:00-05:00
             self.assertEqual(sum(bool(record["notified"]) for record in after.values()), 8)
             self.assertEqual(sum(not bool(record["notified"]) for record in after.values()), 0)
 
+    def test_delisting_gate_blocks_new_buy_but_preserves_sell(self) -> None:
+        rows = [
+            ("buy", 9, "WBD", "BUY CANDIDATE: WBD", ["momentum"], []),
+            ("sell", 8, "WBD", "SELL SIGNAL: WBD", ["risk"], []),
+            ("buy", 9, "AMD", "BUY CANDIDATE: AMD", ["momentum"], []),
+        ]
+        gated, notes = confirm.apply_delisting_buy_gate(rows)
+        self.assertEqual(gated[0][0], "no_buy")
+        self.assertIn("scheduled for delisting", gated[0][3])
+        self.assertEqual(gated[1][0], "sell")
+        self.assertEqual(gated[2][0], "buy")
+        self.assertIn("WBD", notes)
+
+    def test_delisting_gate_removes_intraday_buy_and_cancel_path(self) -> None:
+        signals = {
+            "WBD": {"signals": [
+                {"side": "BUY", "model": "VWAP reclaim"},
+                {"side": "SELL", "model": "VWAP rejection"},
+            ]},
+            "AMD": {"signals": [{"side": "BUY", "model": "VWAP reclaim"}]},
+        }
+        gated = confirm.apply_intraday_paper_delisting_gate(signals)
+        self.assertEqual([s["side"] for s in gated["WBD"]["signals"]], ["SELL"])
+        self.assertIn("scheduled for delisting", gated["WBD"]["buy_gate_blocker"])
+        self.assertEqual(gated["AMD"]["signals"][0]["side"], "BUY")
+        after_position_gate = confirm.apply_intraday_paper_position_gate(gated, {})
+        self.assertEqual(after_position_gate["WBD"]["signals"], [])
+
     def test_intraday_paper_buy_uses_price_and_whole_share_gates(self) -> None:
         signals = {
             "PENNY": {"signals": [{"side": "BUY", "model": "VWAP reclaim"}]},

@@ -105,6 +105,13 @@ NEWS_CANDIDATE_LIMIT = int(os.environ.get("MARKET_CONFIRM_NEWS_CANDIDATE_LIMIT",
 FEED_CANDIDATE_HORIZON_DAYS = int(os.environ.get("MARKET_CONFIRM_FEED_CANDIDATE_HORIZON_DAYS", "7"))
 FEED_CANDIDATE_PACKET_LIMIT = int(os.environ.get("MARKET_CONFIRM_FEED_CANDIDATE_PACKET_LIMIT", "240"))
 AMBIGUOUS_TICKERS = {"ALL", "ARE", "BE", "BY", "CAN", "FOR", "HAS", "IT", "NOW", "ON", "OR", "SO", "TE"}
+# Symbols scheduled for delisting or another terminal corporate action are not
+# eligible for new trade recommendations. Override with a comma-separated list.
+EXCLUDED_TICKERS = frozenset(
+    ticker.strip().upper()
+    for ticker in os.environ.get("MARKET_CONFIRM_EXCLUDED_TICKERS", "WBD").split(",")
+    if ticker.strip()
+)
 MIN_BUY_PRICE = float(os.environ.get("MARKET_CONFIRM_MIN_BUY_PRICE", "2.0"))
 MIN_BUY_AVG_DOLLAR_VOLUME = float(os.environ.get("MARKET_CONFIRM_MIN_BUY_AVG_DOLLAR_VOLUME", "1000000"))
 # Dollar turnover by itself is insufficient: a high-priced thin name can still
@@ -2492,6 +2499,23 @@ def apply_schwab_balance_gate(
     return updated_rows, notes
 
 
+def apply_delisting_buy_gate(
+    rows: list[tuple[str, int, str, str, list[str], list[str]]],
+) -> tuple[list[tuple[str, int, str, str, list[str], list[str]]], list[str]]:
+    """Block new BUY recommendations for excluded/delisting symbols."""
+    buy_actions = {"predictive_buy", "aggressive_buy", "early_buy", "buy"}
+    updated_rows = []
+    blocked: list[str] = []
+    for action, score, ticker, decision, evidence, blockers in rows:
+        if ticker not in EXCLUDED_TICKERS or action not in buy_actions:
+            updated_rows.append((action, score, ticker, decision, evidence, blockers))
+            continue
+        reason = f"{ticker} excluded: scheduled for delisting/terminal corporate action; no new trade recommendation"
+        blocked.append(ticker)
+        updated_rows.append(("no_buy", score, ticker, f"NO BUY: {ticker} - scheduled for delisting/terminal corporate action", evidence, [*blockers, reason]))
+    return updated_rows, (["Delisting exclusion blocked new BUY recommendations.", *blocked] if blocked else [])
+
+
 def apply_existing_position_buy_gate(
     rows: list[tuple[str, int, str, str, list[str], list[str]]],
     all_positions: dict[str, dict],
@@ -3544,6 +3568,26 @@ def intraday_paper_signals(tickers: list[str], open_positions: dict[str, dict]) 
         return dict(pool.map(fetch_one, ordered))
 
 
+def apply_intraday_paper_delisting_gate(
+    paper_signals: dict[str, dict],
+) -> dict[str, dict]:
+    """Remove BUY-side paper alerts for excluded/delisting symbols."""
+    gated: dict[str, dict] = {}
+    for ticker, paper in paper_signals.items():
+        if ticker not in EXCLUDED_TICKERS or not isinstance(paper, dict):
+            gated[ticker] = paper
+            continue
+        record = dict(paper)
+        signals = paper.get("signals") if isinstance(paper.get("signals"), list) else []
+        removed = [signal for signal in signals if isinstance(signal, dict) and signal.get("side") == "BUY"]
+        if removed:
+            record["suppressed_buy_models"] = [str(signal.get("model")) for signal in removed]
+            record["buy_gate_blocker"] = "scheduled for delisting/terminal corporate action; no new BUY recommendation"
+        record["signals"] = [signal for signal in signals if not (isinstance(signal, dict) and signal.get("side") == "BUY")]
+        gated[ticker] = record
+    return gated
+
+
 def apply_intraday_paper_buy_price_gates(
     paper_signals: dict[str, dict],
     quotes: dict[str, Quote],
@@ -3743,6 +3787,7 @@ def build_report(
     traded_this_session = same_session_traded_symbols(now, open_positions)
     log_stage("state")
     paper_intraday = intraday_paper_signals(selected, all_broker_positions)
+    paper_intraday = apply_intraday_paper_delisting_gate(paper_intraday)
     paper_intraday = apply_intraday_paper_buy_price_gates(
         paper_intraday, quotes, explicit_watchlist, schwab_buying_power
     )
@@ -3798,6 +3843,7 @@ def build_report(
     rows, broker_eligibility_notes = apply_broker_eligibility_gate(rows)
     rows, account_fit_notes = apply_account_fit_gate(rows, quotes, None)
     rows, schwab_balance_notes = apply_schwab_balance_gate(rows, quotes, schwab_buying_power, schwab_buying_power_status)
+    rows, delisting_notes = apply_delisting_buy_gate(rows)
     idea_screen_state = update_idea_screen(rows, quotes, history_features, source_verifications, now)
     buy_actions = {"predictive_buy", "aggressive_buy", "early_buy", "buy"}
     trade_plans = {
@@ -3826,6 +3872,7 @@ def build_report(
         f"cash_only_no_margin: {str(CASH_ONLY_NO_MARGIN).lower()}",
         f"same_session_trade_holdoff_symbols: {', '.join(sorted(traded_this_session)) if traded_this_session else 'none'}",
         f"broker_buy_excluded_symbols: {', '.join(sorted(read_buy_excluded_symbols())) or 'none'}",
+        f"delisting_excluded_symbols: {', '.join(sorted(EXCLUDED_TICKERS)) or 'none'}",
         f"idea_screen_candidates: {len((idea_screen_state.get('candidates') or {}))}",
         f"catalyst_calendar_symbols: {len(catalyst_events)}",
         f"thesis_tracker_positions: {len((thesis_state.get('positions') or {})) if isinstance(thesis_state.get('positions'), dict) else 0}",
@@ -3925,6 +3972,9 @@ def build_report(
     if schwab_balance_notes:
         lines.extend(["", "## schwab_balance_gate"])
         lines.extend(f"- {note}" for note in schwab_balance_notes)
+    if delisting_notes:
+        lines.extend(["", "## delisting_exclusion"])
+        lines.extend(f"- {note}" for note in delisting_notes)
     if account_fit_notes:
         lines.extend(["", "## account_fit_gate"])
         lines.extend(f"- {note}" for note in account_fit_notes)
