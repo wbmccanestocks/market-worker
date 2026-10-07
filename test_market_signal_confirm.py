@@ -423,6 +423,21 @@ class MarketSignalConfirmTest(unittest.TestCase):
             risks = confirm.binary_event_risk_for_ticker("AAPL", {}, [], events, now)
             self.assertTrue(any("upcoming earnings" in risk for risk in risks))
 
+    def test_catalyst_calendar_classifies_scheduled_delisting(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            now = dt.datetime(2026, 6, 29, 9, 0, tzinfo=confirm.TZ)
+            calendar_path = Path(tmpdir) / "market-catalyst-calendar.json"
+            with patch.object(confirm, "CATALYST_CALENDAR_FILE", calendar_path):
+                events = confirm.update_catalyst_calendar(
+                    ["WBD"],
+                    {"WBD": ["WBD will cease trading after the Skydance deal closes; last trading day is July 1"]},
+                    {"WBD": []},
+                    {},
+                    now,
+                )
+            self.assertEqual(events["WBD"][0]["type"], "delisting")
+            self.assertEqual(confirm.scheduled_delisting_symbols(events), {"WBD"})
+
     def test_idea_screen_persists_quality_candidates(self) -> None:
         with TemporaryDirectory() as tmpdir:
             screen_path = Path(tmpdir) / "market-idea-screen.json"
@@ -920,7 +935,7 @@ valid_until: 2026-06-16T14:40:00-05:00
             ("sell", 8, "WBD", "SELL SIGNAL: WBD", ["risk"], []),
             ("buy", 9, "AMD", "BUY CANDIDATE: AMD", ["momentum"], []),
         ]
-        gated, notes = confirm.apply_delisting_buy_gate(rows)
+        gated, notes = confirm.apply_delisting_buy_gate(rows, {"WBD"})
         self.assertEqual(gated[0][0], "no_buy")
         self.assertIn("scheduled for delisting", gated[0][3])
         self.assertEqual(gated[1][0], "sell")
@@ -935,12 +950,20 @@ valid_until: 2026-06-16T14:40:00-05:00
             ]},
             "AMD": {"signals": [{"side": "BUY", "model": "VWAP reclaim"}]},
         }
-        gated = confirm.apply_intraday_paper_delisting_gate(signals)
+        gated = confirm.apply_intraday_paper_delisting_gate(signals, {"WBD"})
         self.assertEqual([s["side"] for s in gated["WBD"]["signals"]], ["SELL"])
         self.assertIn("scheduled for delisting", gated["WBD"]["buy_gate_blocker"])
         self.assertEqual(gated["AMD"]["signals"][0]["side"], "BUY")
         after_position_gate = confirm.apply_intraday_paper_position_gate(gated, {})
         self.assertEqual(after_position_gate["WBD"]["signals"], [])
+
+    def test_scheduled_delisting_symbols_use_catalyst_evidence_and_explicit_override(self) -> None:
+        events = {
+            "SKY": [{"type": "delisting", "snippet": "will cease trading after the merger closes"}],
+            "AMD": [{"type": "merger", "snippet": "announces a merger"}],
+        }
+        with patch.object(confirm, "EXCLUDED_TICKERS", frozenset({"WBD"})):
+            self.assertEqual(confirm.scheduled_delisting_symbols(events), {"SKY", "WBD"})
 
     def test_intraday_paper_buy_uses_price_and_whole_share_gates(self) -> None:
         signals = {

@@ -105,11 +105,12 @@ NEWS_CANDIDATE_LIMIT = int(os.environ.get("MARKET_CONFIRM_NEWS_CANDIDATE_LIMIT",
 FEED_CANDIDATE_HORIZON_DAYS = int(os.environ.get("MARKET_CONFIRM_FEED_CANDIDATE_HORIZON_DAYS", "7"))
 FEED_CANDIDATE_PACKET_LIMIT = int(os.environ.get("MARKET_CONFIRM_FEED_CANDIDATE_PACKET_LIMIT", "240"))
 AMBIGUOUS_TICKERS = {"ALL", "ARE", "BE", "BY", "CAN", "FOR", "HAS", "IT", "NOW", "ON", "OR", "SO", "TE"}
-# Symbols scheduled for delisting or another terminal corporate action are not
-# eligible for new trade recommendations. Override with a comma-separated list.
+# Explicit symbols scheduled for delisting or another terminal corporate action
+# may be supplied as a safety override. The normal path derives this set from
+# fresh catalyst evidence; it is intentionally empty by default.
 EXCLUDED_TICKERS = frozenset(
     ticker.strip().upper()
-    for ticker in os.environ.get("MARKET_CONFIRM_EXCLUDED_TICKERS", "WBD").split(",")
+    for ticker in os.environ.get("MARKET_CONFIRM_EXCLUDED_TICKERS", "").split(",")
     if ticker.strip()
 )
 MIN_BUY_PRICE = float(os.environ.get("MARKET_CONFIRM_MIN_BUY_PRICE", "2.0"))
@@ -257,6 +258,19 @@ CATALYST_EVENT_PATTERNS = [
         r"\bproduct launch\b",
         r"\bmerger\b",
         r"\bacquisition\b",
+    ]
+]
+DELISTING_EVENT_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in [
+        r"\bscheduled to be delist(?:ed|ing)\b",
+        r"\bdelist(?:ed|ing)\b",
+        r"\bwill cease trading\b",
+        r"\bcease trading following\b",
+        r"\blast trading day\b",
+        r"\bwill no longer be listed\b",
+        r"\bwill no longer trade\b",
+        r"\btake[- ]private\b",
     ]
 ]
 CONFIRMATION_ORDER = ["opening", "one-hour", "midday", "late-day", "friday-closeout", "after-close"]
@@ -1897,10 +1911,15 @@ def update_catalyst_calendar(
         )
         for snippet in snippets:
             compact = re.sub(r"\s+", " ", snippet).strip()
-            if not compact or not any(pattern.search(compact) for pattern in CATALYST_EVENT_PATTERNS):
+            if not compact or not (
+                any(pattern.search(compact) for pattern in CATALYST_EVENT_PATTERNS)
+                or any(pattern.search(compact) for pattern in DELISTING_EVENT_PATTERNS)
+            ):
                 continue
             lower = compact.lower()
-            event_type = "earnings" if "earnings" in lower else (
+            event_type = (
+                "delisting" if any(pattern.search(compact) for pattern in DELISTING_EVENT_PATTERNS) else
+                "earnings" if "earnings" in lower else
                 "analyst_event" if "analyst day" in lower or "investor day" in lower or "conference" in lower else
                 "regulatory" if any(term in lower for term in ("fda", "pdufa", "approval")) else
                 "corporate"
@@ -1931,6 +1950,17 @@ def update_catalyst_calendar(
     state["generated_at"] = now.isoformat()
     write_json_atomic(CATALYST_CALENDAR_FILE, state)
     return {ticker: rows for ticker, rows in events.items() if isinstance(rows, list)}
+
+
+def scheduled_delisting_symbols(
+    catalyst_events: dict[str, list[dict]],
+) -> set[str]:
+    """Return symbols with fresh evidence of a scheduled delisting."""
+    symbols = set(EXCLUDED_TICKERS)
+    for ticker, rows in catalyst_events.items():
+        if any(isinstance(row, dict) and str(row.get("type") or "").lower() == "delisting" for row in rows or []):
+            symbols.add(str(ticker).upper())
+    return symbols
 
 
 def sync_thesis_tracker(
@@ -2501,13 +2531,15 @@ def apply_schwab_balance_gate(
 
 def apply_delisting_buy_gate(
     rows: list[tuple[str, int, str, str, list[str], list[str]]],
+    excluded_tickers: set[str] | frozenset[str] | None = None,
 ) -> tuple[list[tuple[str, int, str, str, list[str], list[str]]], list[str]]:
-    """Block new BUY recommendations for excluded/delisting symbols."""
+    """Block new BUY recommendations for verified scheduled-delisting symbols."""
+    excluded = set(EXCLUDED_TICKERS if excluded_tickers is None else excluded_tickers)
     buy_actions = {"predictive_buy", "aggressive_buy", "early_buy", "buy"}
     updated_rows = []
     blocked: list[str] = []
     for action, score, ticker, decision, evidence, blockers in rows:
-        if ticker not in EXCLUDED_TICKERS or action not in buy_actions:
+        if ticker not in excluded or action not in buy_actions:
             updated_rows.append((action, score, ticker, decision, evidence, blockers))
             continue
         reason = f"{ticker} excluded: scheduled for delisting/terminal corporate action; no new trade recommendation"
@@ -3570,11 +3602,13 @@ def intraday_paper_signals(tickers: list[str], open_positions: dict[str, dict]) 
 
 def apply_intraday_paper_delisting_gate(
     paper_signals: dict[str, dict],
+    excluded_tickers: set[str] | frozenset[str] | None = None,
 ) -> dict[str, dict]:
-    """Remove BUY-side paper alerts for excluded/delisting symbols."""
+    """Remove BUY-side paper alerts for verified scheduled-delisting symbols."""
+    excluded = set(EXCLUDED_TICKERS if excluded_tickers is None else excluded_tickers)
     gated: dict[str, dict] = {}
     for ticker, paper in paper_signals.items():
-        if ticker not in EXCLUDED_TICKERS or not isinstance(paper, dict):
+        if ticker not in excluded or not isinstance(paper, dict):
             gated[ticker] = paper
             continue
         record = dict(paper)
@@ -3782,12 +3816,13 @@ def build_report(
     headlines = {ticker: fetch_rss_headlines(ticker) for ticker in selected}
     log_stage("rss headlines")
     catalyst_events = update_catalyst_calendar(selected, packet_hits, headlines, source_verifications, now)
+    scheduled_delistings = scheduled_delisting_symbols(catalyst_events)
     thesis_state = sync_thesis_tracker(open_positions, packet_hits, headlines, now)
     schwab_buying_power, schwab_buying_power_status = read_schwab_buying_power()
     traded_this_session = same_session_traded_symbols(now, open_positions)
     log_stage("state")
     paper_intraday = intraday_paper_signals(selected, all_broker_positions)
-    paper_intraday = apply_intraday_paper_delisting_gate(paper_intraday)
+    paper_intraday = apply_intraday_paper_delisting_gate(paper_intraday, scheduled_delistings)
     paper_intraday = apply_intraday_paper_buy_price_gates(
         paper_intraday, quotes, explicit_watchlist, schwab_buying_power
     )
@@ -3843,7 +3878,7 @@ def build_report(
     rows, broker_eligibility_notes = apply_broker_eligibility_gate(rows)
     rows, account_fit_notes = apply_account_fit_gate(rows, quotes, None)
     rows, schwab_balance_notes = apply_schwab_balance_gate(rows, quotes, schwab_buying_power, schwab_buying_power_status)
-    rows, delisting_notes = apply_delisting_buy_gate(rows)
+    rows, delisting_notes = apply_delisting_buy_gate(rows, scheduled_delistings)
     idea_screen_state = update_idea_screen(rows, quotes, history_features, source_verifications, now)
     buy_actions = {"predictive_buy", "aggressive_buy", "early_buy", "buy"}
     trade_plans = {
@@ -3872,7 +3907,7 @@ def build_report(
         f"cash_only_no_margin: {str(CASH_ONLY_NO_MARGIN).lower()}",
         f"same_session_trade_holdoff_symbols: {', '.join(sorted(traded_this_session)) if traded_this_session else 'none'}",
         f"broker_buy_excluded_symbols: {', '.join(sorted(read_buy_excluded_symbols())) or 'none'}",
-        f"delisting_excluded_symbols: {', '.join(sorted(EXCLUDED_TICKERS)) or 'none'}",
+        f"delisting_excluded_symbols: {', '.join(sorted(scheduled_delistings)) or 'none'}",
         f"idea_screen_candidates: {len((idea_screen_state.get('candidates') or {}))}",
         f"catalyst_calendar_symbols: {len(catalyst_events)}",
         f"thesis_tracker_positions: {len((thesis_state.get('positions') or {})) if isinstance(thesis_state.get('positions'), dict) else 0}",
