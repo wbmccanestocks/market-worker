@@ -1048,7 +1048,7 @@ valid_until: 2026-06-16T14:40:00-05:00
             report = Path(tmpdir) / "report.md"
             report.write_text(
                 "## decisions\n"
-                "- INTRADAY PAPER BUY: AMD - max buy price: $13.25; pre-fill intraday trailing BUY: $0.51 (0.50%; trigger after rebound from trailing low); after-buy intraday trailing stop: 0.89% (suggested stop $13.06; recent swing low minus 0.3 ATR); research alert only\n"
+                "- INTRADAY PAPER BUY: AMD - score 7; max buy price: $13.25; pre-fill intraday trailing BUY: $0.51 (0.50%; trigger after rebound from trailing low); after-buy intraday trailing stop: 0.89% (suggested stop $13.06; recent swing low minus 0.3 ATR); research alert only\n"
                 "\n## intraday_paper_details\n"
                 "### intraday paper AMD\n"
                 "- pre-fill intraday trailing BUY: $0.51 (0.50%; trigger after rebound from trailing low)\n"

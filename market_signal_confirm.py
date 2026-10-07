@@ -3980,7 +3980,7 @@ def build_report(
         trailing_buy_text = intraday_trailing_buy_text(ticker, quotes[ticker], history_features.get(ticker), paper_intraday.get(ticker))
         max_buy_text = intraday_max_buy_price_text(ticker, quotes[ticker], history_features.get(ticker))
         lines.append(
-            f"- INTRADAY PAPER BUY: {ticker} - {max_buy_text}; {trailing_buy_text}; "
+            f"- INTRADAY PAPER BUY: {ticker} - score {score}; {max_buy_text}; {trailing_buy_text}; "
             f"{protection_text}; research alert only"
         )
     if sells:
