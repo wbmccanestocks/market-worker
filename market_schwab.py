@@ -352,6 +352,26 @@ def submit_market_sell(config: dict[str, str], account_hash: str, order: dict, *
     return api_post_json(config, f"{TRADER_URL}/accounts/{urllib.parse.quote(account, safe='')}/orders", order)
 
 
+def resolve_single_account_hash(config: dict[str, str], account_labels: list[str] | None = None) -> str:
+    """Resolve one Schwab account for automatic selling; reject ambiguity."""
+    linked = api_get(config, f"{TRADER_URL}/accounts/accountNumbers")
+    if not isinstance(linked, list):
+        raise RuntimeError("Schwab account-number lookup returned an unexpected response")
+    accounts = [row for row in linked if isinstance(row, dict) and str(row.get("hashValue") or "").strip()]
+    if len(accounts) == 1:
+        return str(accounts[0]["hashValue"])
+    labels = {str(value).strip().lower() for value in (account_labels or []) if str(value).strip()}
+    matches = []
+    for row in accounts:
+        public = str(row.get("accountNumber") or "").strip().lower()
+        hashed = sanitized_account_id(row.get("accountNumber")) or ""
+        if public in labels or hashed.lower() in labels:
+            matches.append(row)
+    if len(matches) == 1:
+        return str(matches[0]["hashValue"])
+    raise RuntimeError("automatic sell requires exactly one unambiguous Schwab account")
+
+
 def ensure_local_certificate() -> None:
     if CERT_FILE.exists() and KEY_FILE.exists():
         return

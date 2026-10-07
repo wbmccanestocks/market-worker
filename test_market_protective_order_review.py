@@ -134,6 +134,38 @@ class MarketProtectiveOrderReviewTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "explicit confirmation"):
                 market_schwab.submit_market_sell({}, "account-hash", order)
 
+    def test_automatic_sell_requires_profit(self) -> None:
+        row = {
+            "ticker": "CRK",
+            "action": "manual_exit_review",
+            "shares": 4.0,
+            "price": 11.90,
+            "entry": 12.50,
+        }
+        with mock.patch.object(review, "AUTOMATIC_SELLS_ENABLED", True):
+            self.assertIn("not above cost basis", review.automatic_sell(row))
+
+    def test_automatic_sell_submits_only_eligible_profitable_row(self) -> None:
+        row = {
+            "ticker": "CRK",
+            "action": "manual_exit_review",
+            "shares": 4.0,
+            "price": 13.12,
+            "entry": 12.50,
+            "accounts": ["schwab"],
+            "open_sell_orders": [],
+        }
+        with TemporaryDirectory() as tmpdir:
+            with mock.patch.object(review, "AUTOMATIC_SELLS_ENABLED", True), \
+                 mock.patch.object(review, "AUTOMATIC_SELLS_DISABLED", False), \
+                 mock.patch.object(review, "SELL_TICKET_DIR", Path(tmpdir)), \
+                 mock.patch.object(market_schwab, "load_env", return_value={}), \
+                 mock.patch.object(market_schwab, "resolve_single_account_hash", return_value="account-hash"), \
+                 mock.patch.object(market_schwab, "submit_market_sell", return_value={"orderId": "123"}) as submit:
+                result = review.automatic_sell(row)
+        self.assertIn("submitted", result)
+        submit.assert_called_once()
+
     def test_loss_sell_exit_keeps_existing_wording(self) -> None:
         self.assertEqual(
             review.action_instruction({

@@ -2,8 +2,8 @@
 """Advisory review for protective sell orders on open positions.
 
 This script reviews current holdings, live quotes, recent sell-rule evidence,
-then writes a recommendation report and review-only sell tickets. It never places,
-cancels, or modifies orders; broker submission remains disabled by default.
+then writes a recommendation report and sell tickets. Automatic submission is limited to
+explicitly enabled, profitable, eligible whole-share SELL/EXIT rows; other actions remain advisory.
 """
 
 from __future__ import annotations
@@ -33,6 +33,8 @@ TELEGRAM_TARGET = os.environ.get("MARKET_PROTECTIVE_TELEGRAM_TARGET", confirm.TE
 TELEGRAM_ACCOUNT = os.environ.get("MARKET_TELEGRAM_ACCOUNT", confirm.TELEGRAM_ACCOUNT)
 NOTIFY_TELEGRAM = os.environ.get("MARKET_PROTECTIVE_NOTIFY_TELEGRAM", "1").lower() not in {"0", "false", "no"}
 NOTIFY_DRY_RUN = os.environ.get("MARKET_PROTECTIVE_NOTIFY_DRY_RUN", "0").lower() in {"1", "true", "yes"}
+AUTOMATIC_SELLS_ENABLED = os.environ.get("MARKET_SCHWAB_ENABLE_AUTOMATIC_SELLS", "0").lower() in {"1", "true", "yes"}
+AUTOMATIC_SELLS_DISABLED = os.environ.get("MARKET_SCHWAB_DISABLE_AUTOMATIC_SELLS", "0").lower() in {"1", "true", "yes"}
 FRACTIONAL_PRICE_ACTIONS = {
     "manual_fractional_exit_review",
     "manual_fractional_protective_price",
@@ -487,6 +489,41 @@ def sell_ticket_path(row: dict, report: Path | None = None) -> Path | None:
     return path
 
 
+def automatic_sell(row: dict, report: Path | None = None) -> str:
+    """Submit only profitable, eligible SELL/EXIT rows when both opt-ins are enabled."""
+    if AUTOMATIC_SELLS_DISABLED or not AUTOMATIC_SELLS_ENABLED:
+        return "automatic sell disabled"
+    if row.get("action") != "manual_exit_review":
+        return "automatic sell skipped: position is not eligible for automatic whole-share exit"
+    price = number(row.get("price"))
+    entry = number(row.get("entry"))
+    shares = number(row.get("shares"))
+    if price is None or entry is None or price <= entry or shares is None or shares <= 0:
+        return "automatic sell skipped: current price is not above cost basis"
+    if any(str(order.get("side") or "").lower() == "sell" for order in row.get("open_sell_orders") or []):
+        return "automatic sell skipped: open sell order already exists"
+    try:
+        config = market_schwab.load_env()
+        account_hash = market_schwab.resolve_single_account_hash(config, row.get("accounts"))
+        order = market_schwab.build_market_sell_order(row["ticker"], shares)
+        result = market_schwab.submit_market_sell(config, account_hash, order, confirmed=True)
+        ticket = sell_ticket_path(row, report)
+        if ticket:
+            payload = json.loads(ticket.read_text(encoding="utf-8"))
+            payload.update({
+                "status": "submitted",
+                "execution_submitted": True,
+                "submission_enabled": True,
+                "submitted_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                "broker_order_id": result.get("orderId") if isinstance(result, dict) else None,
+                "broker_response_status": result.get("status") if isinstance(result, dict) else None,
+            })
+            ticket.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+        return f"automatic sell submitted: {row['ticker']} {shares:g} shares"
+    except Exception as exc:  # noqa: BLE001 - report and preserve the review loop.
+        return f"automatic sell failed: {type(exc).__name__}: {exc}"
+
+
 def action_instruction(row: dict) -> str:
     """Return the plain-language action a user should take."""
     ticker = row["ticker"]
@@ -499,6 +536,9 @@ def action_instruction(row: dict) -> str:
         price = number(row.get("price"))
         entry = number(row.get("entry"))
         shares = number(row.get("shares"))
+        automatic_result = str(row.get("automatic_sell_result") or "")
+        if automatic_result.startswith("automatic sell submitted"):
+            return f"{ticker}: SELL SUBMITTED — sell {shares:g} shares at market; current {money(price)} > cost basis {money(entry)}"
         if price is not None and entry is not None and shares is not None and price > entry:
             return f"{ticker}: SELL TICKET READY — sell {shares:g} shares at market; current {money(price)} > cost basis {money(entry)}; confirm before submitting"
         return f"{ticker}: SELL/EXIT — sell evidence is active; review the position now"
@@ -698,7 +738,10 @@ def notify_telegram(rows: list[dict], changes: list[dict], report: Path | None, 
     if not report:
         return "telegram notification skipped: no report"
     for row in changes:
-        if row.get("action") in {"manual_exit_review", "manual_fractional_exit_review"}:
+        if row.get("action") == "manual_exit_review":
+            result = automatic_sell(row, report)
+            row["automatic_sell_result"] = result
+        elif row.get("action") == "manual_fractional_exit_review":
             sell_ticket_path(row, report)
     if not NOTIFY_TELEGRAM:
         return "telegram notification disabled"
