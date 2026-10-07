@@ -849,7 +849,7 @@ valid_until: 2026-06-16T14:40:00-05:00
             self.assertIsNone(message)
             self.assertEqual(status, "telegram notification skipped: no recommendation state changes")
 
-    def test_buy_cancel_still_sends_when_position_was_not_opened(self) -> None:
+    def test_disappeared_buy_does_not_send_cancel_when_position_was_not_opened(self) -> None:
         with TemporaryDirectory() as tmpdir:
             state_path = Path(tmpdir) / "market-recommendation-state.json"
             report_path = Path(tmpdir) / "report.md"
@@ -885,8 +885,8 @@ valid_until: 2026-06-16T14:40:00-05:00
             ):
                 message, status = confirm.recommendation_state_changes(report_path, "NO BUY SIGNALS")
 
-            self.assertEqual(status, "recommendation state changed")
-            self.assertIn("CANCEL BUY: PSN", message or "")
+            self.assertIsNone(message)
+            self.assertEqual(status, "telegram notification skipped: no recommendation state changes")
 
     def test_intraday_notification_batch_keeps_all_sells_and_cancels_but_caps_buys(self) -> None:
         changes = [
@@ -1126,6 +1126,29 @@ valid_until: 2026-06-16T14:40:00-05:00
                 patch.object(confirm, "read_positions", return_value={}),
             ):
                 message, status, delivered = confirm.recommendation_state_change_details(cancel_report, "cancel")
+
+        self.assertIsNone(message)
+        self.assertEqual(status, "telegram notification skipped: no recommendation state changes")
+        self.assertEqual(delivered, [])
+
+    def test_disappeared_ordinary_buy_does_not_create_cancel_buy(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / "market-recommendation-state.json"
+            empty_report = Path(tmpdir) / "empty.md"
+            state_path.write_text(
+                json.dumps({
+                    "active": {
+                        "AMD": {"action": "BUY", "notified": True}
+                    }
+                }),
+                encoding="utf-8",
+            )
+            empty_report.write_text("## decisions\n- NO BUY SIGNALS\n", encoding="utf-8")
+            with (
+                patch.object(confirm, "RECOMMENDATION_STATE_FILE", state_path),
+                patch.object(confirm, "read_positions", return_value={}),
+            ):
+                message, status, delivered = confirm.recommendation_state_change_details(empty_report, "empty")
 
         self.assertIsNone(message)
         self.assertEqual(status, "telegram notification skipped: no recommendation state changes")

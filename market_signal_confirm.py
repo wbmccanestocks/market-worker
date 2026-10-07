@@ -4373,8 +4373,6 @@ def recommendation_state_change_details(report_path: Path, summary: str) -> tupl
                 continue
             if prior_action == "SELL" and ticker in open_position_tickers:
                 changes.append((ticker, f"CANCEL_{prior_action}", f"CANCEL {prior_action}: {ticker} no longer appears in latest recommendations"))
-            elif prior_action in {"BUY", "CANCEL_BUY"} and ticker not in open_position_tickers:
-                changes.append((ticker, f"CANCEL_{prior_action}", f"CANCEL {prior_action}: {ticker} no longer appears in latest recommendations"))
         previous.pop(ticker, None)
 
     state["last_report"] = report_path.name
