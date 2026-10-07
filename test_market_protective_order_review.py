@@ -115,8 +115,24 @@ class MarketProtectiveOrderReviewTest(unittest.TestCase):
         self.assertEqual(ticket["ticker"], "CRK")
         self.assertEqual(ticket["quantity"], 4.0)
         self.assertEqual(ticket["order_type"], "MARKET")
+        self.assertEqual(ticket["order_payload"]["orderType"], "MARKET")
+        self.assertEqual(ticket["order_payload"]["orderLegCollection"][0]["instruction"], "SELL")
+        self.assertEqual(ticket["order_payload"]["orderLegCollection"][0]["quantity"], 4.0)
         self.assertTrue(ticket["confirmation_required"])
         self.assertFalse(ticket["execution_submitted"])
+        self.assertFalse(ticket["submission_enabled"])
+
+    def test_market_sell_submission_is_disabled_without_opt_in(self) -> None:
+        order = market_schwab.build_market_sell_order("CRK", 4)
+        with mock.patch.dict(review.os.environ, {"MARKET_SCHWAB_ENABLE_ORDER_SUBMISSION": "0"}, clear=False):
+            with self.assertRaisesRegex(RuntimeError, "order submission is disabled"):
+                market_schwab.submit_market_sell({}, "account-hash", order, confirmed=True)
+
+    def test_market_sell_requires_confirmation(self) -> None:
+        order = market_schwab.build_market_sell_order("CRK", 4)
+        with mock.patch.dict(review.os.environ, {"MARKET_SCHWAB_ENABLE_ORDER_SUBMISSION": "1"}, clear=False):
+            with self.assertRaisesRegex(RuntimeError, "explicit confirmation"):
+                market_schwab.submit_market_sell({}, "account-hash", order)
 
     def test_loss_sell_exit_keeps_existing_wording(self) -> None:
         self.assertEqual(

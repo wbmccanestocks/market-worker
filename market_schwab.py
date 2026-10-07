@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only Schwab OAuth client and market-worker position synchronizer."""
+"""Schwab OAuth client, read-only synchronizer, and gated order preparation."""
 
 from __future__ import annotations
 
@@ -292,6 +292,64 @@ def api_get(config: dict[str, str], url: str) -> object:
     except urllib.error.HTTPError as exc:
         body = exc.read().decode(errors="replace")[:1000]
         raise RuntimeError(f"Schwab API request failed: HTTP {exc.code}: {body}") from exc
+
+
+def api_post_json(config: dict[str, str], url: str, payload: dict) -> object:
+    """Submit JSON only through an explicit, disabled-by-default execution boundary."""
+    if not env_bool("MARKET_SCHWAB_ENABLE_ORDER_SUBMISSION", False):
+        raise RuntimeError("Schwab order submission is disabled; review the ticket and enable it explicitly")
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {valid_access_token(config)}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            response_body = response.read()
+            return json.loads(response_body) if response_body else {"status": response.status}
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode(errors="replace")[:1000]
+        raise RuntimeError(f"Schwab order submission failed: HTTP {exc.code}: {error_body}") from exc
+
+
+def build_market_sell_order(symbol: str, quantity: float) -> dict:
+    """Build the exact Schwab single-leg market sell request without submitting it."""
+    ticker = str(symbol or "").upper().strip()
+    shares = number(quantity)
+    if not ticker or shares is None or shares <= 0:
+        raise ValueError("market sell requires a ticker and positive quantity")
+    return {
+        "orderType": "MARKET",
+        "session": "NORMAL",
+        "duration": "DAY",
+        "orderStrategyType": "SINGLE",
+        "orderLegCollection": [{
+            "instruction": "SELL",
+            "quantity": shares,
+            "instrument": {"symbol": ticker, "assetType": "EQUITY"},
+        }],
+    }
+
+
+def submit_market_sell(config: dict[str, str], account_hash: str, order: dict, *, confirmed: bool = False) -> object:
+    """Submit only after explicit confirmation and the opt-in execution flag are present."""
+    if not confirmed:
+        raise RuntimeError("market sell requires explicit confirmation")
+    if not isinstance(order, dict) or order.get("orderType") != "MARKET":
+        raise ValueError("only MARKET sell orders are supported")
+    legs = order.get("orderLegCollection") or []
+    if len(legs) != 1 or str(legs[0].get("instruction") or "").upper() != "SELL":
+        raise ValueError("only one SELL leg is supported")
+    account = str(account_hash or "").strip()
+    if not account:
+        raise ValueError("Schwab account hash is required")
+    return api_post_json(config, f"{TRADER_URL}/accounts/{urllib.parse.quote(account, safe='')}/orders", order)
 
 
 def ensure_local_certificate() -> None:

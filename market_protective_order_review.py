@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Advisory review for protective sell orders on open positions.
 
-This script is read-only. It reviews current holdings, live quotes, recent
-sell-rule evidence, then writes
-a recommendation report. It never places, cancels, or modifies orders.
+This script reviews current holdings, live quotes, recent sell-rule evidence,
+then writes a recommendation report and review-only sell tickets. It never places,
+cancels, or modifies orders; broker submission remains disabled by default.
 """
 
 from __future__ import annotations
@@ -463,19 +463,24 @@ def sell_ticket_path(row: dict, report: Path | None = None) -> Path | None:
     SELL_TICKET_DIR.mkdir(parents=True, exist_ok=True)
     stem = report.stem if report else dt.datetime.now(TZ).strftime("%Y-%m-%dT%H%M")
     path = SELL_TICKET_DIR / f"{stem}-{row['ticker']}-sell-ticket.json"
+    order_payload = market_schwab.build_market_sell_order(row["ticker"], shares)
     payload = {
-        "schema": "openclaw.market_worker.sell_ticket.v1",
+        "schema": "openclaw.market_worker.sell_ticket.v2",
         "status": "ready_for_review",
+        "broker": "schwab",
         "ticker": row["ticker"],
         "side": "SELL",
         "order_type": "MARKET",
-        "time_in_force": "GFD",
+        "time_in_force": "DAY",
         "quantity": shares,
         "current_price": price,
         "cost_basis": entry,
+        "account_labels": row.get("accounts") or [],
+        "order_payload": order_payload,
         "reason": "SELL/EXIT recommendation with current price above cost basis",
         "confirmation_required": True,
         "execution_submitted": False,
+        "submission_enabled": False,
         "source_action": row.get("action"),
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
