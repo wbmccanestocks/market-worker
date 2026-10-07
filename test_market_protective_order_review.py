@@ -1,3 +1,4 @@
+import json
 import unittest
 from tempfile import TemporaryDirectory
 from pathlib import Path
@@ -93,6 +94,40 @@ class MarketProtectiveOrderReviewTest(unittest.TestCase):
                 "suggested_trailing_pct": 0.89,
             }),
             "NVD: SET protective stop at $100.00 (trailing offset 0.89%)",
+        )
+
+    def test_profitable_sell_exit_becomes_ready_review_ticket(self) -> None:
+        row = {
+            "ticker": "CRK",
+            "action": "manual_exit_review",
+            "shares": 4.0,
+            "price": 13.12,
+            "entry": 12.50,
+        }
+        self.assertIn(
+            "CRK: SELL TICKET READY — sell 4 shares at market; current $13.12 > cost basis $12.50; confirm before submitting",
+            review.action_instruction(row),
+        )
+        with TemporaryDirectory() as tmpdir:
+            with mock.patch.object(review, "SELL_TICKET_DIR", Path(tmpdir)):
+                path = review.sell_ticket_path(row, Path("/tmp/protective-review.md"))
+            ticket = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(ticket["ticker"], "CRK")
+        self.assertEqual(ticket["quantity"], 4.0)
+        self.assertEqual(ticket["order_type"], "MARKET")
+        self.assertTrue(ticket["confirmation_required"])
+        self.assertFalse(ticket["execution_submitted"])
+
+    def test_loss_sell_exit_keeps_existing_wording(self) -> None:
+        self.assertEqual(
+            review.action_instruction({
+                "ticker": "CRK",
+                "action": "manual_exit_review",
+                "shares": 4.0,
+                "price": 11.90,
+                "entry": 12.50,
+            }),
+            "CRK: SELL/EXIT — sell evidence is active; review the position now",
         )
 
     def test_action_instruction_can_say_keep_existing_protection(self) -> None:

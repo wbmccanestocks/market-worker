@@ -25,6 +25,7 @@ import market_schwab
 ROOT = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("MARKET_WORKER_DATA_DIR", str(ROOT.parent / "handoffs" / "market-worker")))
 OUT_DIR = DATA_ROOT / "protective-order-review"
+SELL_TICKET_DIR = Path(os.environ.get("MARKET_SELL_TICKET_DIR", str(DATA_ROOT / "sell-tickets")))
 STATE_FILE = DATA_ROOT / "market-protective-order-review-state.json"
 TZ = confirm.TZ
 OPENCLAW_CLI = os.environ.get("OPENCLAW_CLI", "/home/pi/.npm-global/bin/openclaw")
@@ -452,6 +453,35 @@ def summary_line(row: dict, prefix: str = "") -> str:
     return f"- {prefix}{action_instruction(row)}"
 
 
+def sell_ticket_path(row: dict, report: Path | None = None) -> Path | None:
+    """Write a review-only market-sell ticket for profitable exit signals."""
+    price = number(row.get("price"))
+    entry = number(row.get("entry"))
+    shares = number(row.get("shares"))
+    if price is None or entry is None or shares is None or price <= entry or shares <= 0:
+        return None
+    SELL_TICKET_DIR.mkdir(parents=True, exist_ok=True)
+    stem = report.stem if report else dt.datetime.now(TZ).strftime("%Y-%m-%dT%H%M")
+    path = SELL_TICKET_DIR / f"{stem}-{row['ticker']}-sell-ticket.json"
+    payload = {
+        "schema": "openclaw.market_worker.sell_ticket.v1",
+        "status": "ready_for_review",
+        "ticker": row["ticker"],
+        "side": "SELL",
+        "order_type": "MARKET",
+        "time_in_force": "GFD",
+        "quantity": shares,
+        "current_price": price,
+        "cost_basis": entry,
+        "reason": "SELL/EXIT recommendation with current price above cost basis",
+        "confirmation_required": True,
+        "execution_submitted": False,
+        "source_action": row.get("action"),
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
 def action_instruction(row: dict) -> str:
     """Return the plain-language action a user should take."""
     ticker = row["ticker"]
@@ -461,6 +491,11 @@ def action_instruction(row: dict) -> str:
     existing = trailing_offset_decimal(row.get("existing_trailing_pct"))
     recommended = trailing_offset_decimal(row.get("suggested_trailing_pct"))
     if action in {"manual_exit_review", "manual_fractional_exit_review"}:
+        price = number(row.get("price"))
+        entry = number(row.get("entry"))
+        shares = number(row.get("shares"))
+        if price is not None and entry is not None and shares is not None and price > entry:
+            return f"{ticker}: SELL TICKET READY — sell {shares:g} shares at market; current {money(price)} > cost basis {money(entry)}; confirm before submitting"
         return f"{ticker}: SELL/EXIT — sell evidence is active; review the position now"
     if action == "adjust_trailing_stop":
         return f"{ticker}: CHANGE trailing stop from {existing} to {recommended}"
@@ -657,6 +692,9 @@ def notify_telegram(rows: list[dict], changes: list[dict], report: Path | None, 
         return "telegram notification skipped: no protective-stop notification changes"
     if not report:
         return "telegram notification skipped: no report"
+    for row in changes:
+        if row.get("action") in {"manual_exit_review", "manual_fractional_exit_review"}:
+            sell_ticket_path(row, report)
     if not NOTIFY_TELEGRAM:
         return "telegram notification disabled"
     if not TELEGRAM_TARGET:
