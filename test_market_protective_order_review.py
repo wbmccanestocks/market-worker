@@ -143,7 +143,38 @@ class MarketProtectiveOrderReviewTest(unittest.TestCase):
             "entry": 12.50,
         }
         with mock.patch.object(review, "AUTOMATIC_SELLS_ENABLED", True):
-            self.assertIn("not above cost basis", review.automatic_sell(row))
+            self.assertIn("no profit after exchange cent rounding", review.automatic_sell(row))
+
+    def test_automatic_sell_rejects_fractional_penny_profit(self) -> None:
+        row = {
+            "ticker": "CRK",
+            "action": "manual_exit_review",
+            "shares": 4.0,
+            "price": 12.501,
+            "entry": 12.50,
+        }
+        with mock.patch.object(review, "AUTOMATIC_SELLS_ENABLED", True):
+            self.assertIn("no profit after exchange cent rounding", review.automatic_sell(row))
+
+    def test_automatic_sell_accepts_profit_after_cent_rounding(self) -> None:
+        row = {
+            "ticker": "CRK",
+            "action": "manual_exit_review",
+            "shares": 4.0,
+            "price": 12.505,
+            "entry": 12.50,
+        }
+        with TemporaryDirectory() as tmpdir:
+            with mock.patch.object(review, "AUTOMATIC_SELLS_ENABLED", True), \
+                 mock.patch.object(review, "AUTOMATIC_SELLS_DISABLED", False), \
+                 mock.patch.object(review, "SELL_TICKET_DIR", Path(tmpdir)), \
+                 mock.patch.object(market_schwab, "load_env", return_value={}), \
+                 mock.patch.object(market_schwab, "resolve_single_account_hash", return_value="account-hash"), \
+                 mock.patch.object(market_schwab, "submit_market_sell", return_value={"orderId": "123"}) as submit:
+                # 12.505 rounds to 12.51, so this is a real one-cent-per-share profit.
+                result = review.automatic_sell(row)
+        self.assertIn("submitted", result)
+        submit.assert_called_once()
 
     def test_automatic_sell_submits_only_eligible_profitable_row(self) -> None:
         row = {

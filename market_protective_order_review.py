@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import decimal
 import json
 import math
 import os
@@ -41,6 +42,22 @@ FRACTIONAL_PRICE_ACTIONS = {
 }
 NON_REPORTING_ACTIONS = {"leave_existing_order"}
 TRAILING_OFFSET_MISMATCH_RATIO = 0.10
+CENT = decimal.Decimal("0.01")
+
+
+def rounded_exchange_price(value: object) -> decimal.Decimal | None:
+    """Round a per-share price to cents using exchange-style half-up rounding."""
+    parsed = number(value)
+    if parsed is None:
+        return None
+    return decimal.Decimal(str(parsed)).quantize(CENT, rounding=decimal.ROUND_HALF_UP)
+
+
+def has_rounded_profit(price: object, entry: object) -> bool:
+    """Require a positive profit after both per-share prices are rounded to cents."""
+    rounded_price = rounded_exchange_price(price)
+    rounded_entry = rounded_exchange_price(entry)
+    return rounded_price is not None and rounded_entry is not None and rounded_price > rounded_entry
 
 
 def now_ct() -> dt.datetime:
@@ -498,8 +515,14 @@ def automatic_sell(row: dict, report: Path | None = None) -> str:
     price = number(row.get("price"))
     entry = number(row.get("entry"))
     shares = number(row.get("shares"))
-    if price is None or entry is None or price <= entry or shares is None or shares <= 0:
-        return "automatic sell skipped: current price is not above cost basis"
+    if (
+        price is None
+        or entry is None
+        or not has_rounded_profit(price, entry)
+        or shares is None
+        or shares <= 0
+    ):
+        return "automatic sell skipped: no profit after exchange cent rounding"
     if any(str(order.get("side") or "").lower() == "sell" for order in row.get("open_sell_orders") or []):
         return "automatic sell skipped: open sell order already exists"
     try:
