@@ -8,5 +8,6 @@ Type=oneshot
 WorkingDirectory=/home/pi/.openclaw/workspace/market-worker
 ExecStart=/home/pi/.openclaw/workspace/market-worker/run-market-email-poll.sh
 Environment=GWS=/home/pi/.npm-global/bin/gws
+Environment=GOOGLE_WORKSPACE_CLI_CONFIG_DIR=/home/pi/.config/gws/stocks
 Environment=MARKET_EMAIL_QUERY=newer_than:2d
 Environment=MARKET_EMAIL_MAX=20

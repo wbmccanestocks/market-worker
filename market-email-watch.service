@@ -10,6 +10,7 @@ ExecStart=/home/pi/.openclaw/workspace/market-worker/run-market-email-watch.sh
 Restart=always
 RestartSec=15
 Environment=GWS=/home/pi/.npm-global/bin/gws
+Environment=GOOGLE_WORKSPACE_CLI_CONFIG_DIR=/home/pi/.config/gws/stocks
 Environment=GWS_PROJECT=openclaw-integration-496522
 
 [Install]

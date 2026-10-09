@@ -5,6 +5,7 @@ cd /home/pi/.openclaw/workspace/market-worker
 umask 022
 
 GWS="${GWS:-/home/pi/.npm-global/bin/gws}"
+export GOOGLE_WORKSPACE_CLI_CONFIG_DIR="${GOOGLE_WORKSPACE_CLI_CONFIG_DIR:-/home/pi/.config/gws/stocks}"
 PROJECT="${GWS_PROJECT:-openclaw-integration-496522}"
 HANDOFF_DIR="${MARKET_HANDOFF_DIR:-/home/pi/.openclaw/workspace/handoffs/market-worker}"
 OUT_DIR="${MARKET_EMAIL_OUT_DIR:-$HANDOFF_DIR/email-inbox}"
